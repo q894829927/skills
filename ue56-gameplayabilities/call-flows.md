@@ -354,3 +354,125 @@ ActiveEffects.InternalUpdateNumericalAttribute(Attribute, NewCurrent, ModData);
 
 - `FGameplayAttributeValueChange` 精确类型名未确认；源码确认的是 `FOnAttributeChangeData` / `FOnGameplayAttributeValueChange`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:1002`、`:1017`。
 - 客户端预测失败后的 Attribute/GE/delegate 完整回滚链路未展开，未确认。
+
+# AbilityTask 异步调用链（第六轮）
+
+完整专题见 `ability-tasks.md`。本节保留 Ability 激活后进入异步任务的主链路。
+
+## 生命周期主链
+
+```mermaid
+flowchart TD
+    A["UGameplayAbility::ActivateAbility"] --> B["派生 AbilityTask 静态工厂"]
+    B --> C["UAbilityTask::NewAbilityTask"]
+    C --> D["UGameplayTask::InitTask"]
+    D --> E["UGameplayAbility::OnGameplayTaskInitialized"]
+    E --> F["写入 Task.Ability / Task.AbilitySystemComponent"]
+    F --> G["调用方绑定 Task delegates"]
+    G --> H["UGameplayTask::ReadyForActivation"]
+    H --> I["UGameplayTask::PerformActivation"]
+    I --> J["Task::Activate"]
+    I --> K["UGameplayAbility::OnGameplayTaskActivated -> ActiveTasks.Add"]
+    J --> L["等待输入 / 事件 / Montage / TargetData / GE / Tag / Attribute"]
+    L --> M["Task delegate broadcast"]
+    M --> N["EndTask 或继续监听"]
+    N --> O["UGameplayTask::OnDestroy"]
+    O --> P["UGameplayAbility::OnGameplayTaskDeactivated -> ActiveTasks.Remove"]
+    Q["UGameplayAbility::EndAbility / CancelAbility"] --> R["ActiveTasks TaskOwnerEnded"]
+    R --> O
+```
+
+- `NewAbilityTask` 创建并初始化 task owner，但不激活任务；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask.h:130`、`:135`。
+- `ReadyForActivation` 进入 GameplayTask 激活流程，最终调用派生 `Activate`；源码路径：`Engine/Source/Runtime/GameplayTasks/Private/GameplayTask.cpp:58`、`:277`、`:289`。
+- Ability 作为 task owner 在初始化时写入 ASC/Ability，并在激活/结束时维护 `ActiveTasks`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:1539`、`:1556`、`:1564`。
+- Ability `EndAbility` 会对所有 `ActiveTasks` 调用 `TaskOwnerEnded`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:819`。
+
+## 输入 Task 简化链
+
+```mermaid
+flowchart TD
+    A["ASC AbilityLocalInputPressed / Released"] --> B["Spec.InputPressed 更新"]
+    B --> C["ASC InvokeReplicatedEvent(InputPressed/InputReleased)"]
+    C --> D["WaitInputPress / WaitInputRelease 绑定 AbilityReplicatedEventDelegate"]
+    D --> E["OnPressCallback / OnReleaseCallback"]
+    E --> F["FScopedPredictionWindow"]
+    F --> G["预测客户端 ServerSetReplicatedEvent"]
+    F --> H["非预测路径 ConsumeGenericReplicatedEvent"]
+    G --> I["Broadcast OnPress / OnRelease"]
+    H --> I
+    I --> J["EndTask"]
+```
+
+- ASC 输入路径会触发 generic replicated event；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:2805`、`:2840`。
+- `WaitInputPress` / `WaitInputRelease` 在回调中创建 prediction window，预测客户端把事件 RPC 到服务端，之后广播并结束；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitInputPress.cpp:16`、`:33`、`:45`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitInputRelease.cpp:16`、`:33`、`:45`。
+
+## GameplayEvent Task 简化链
+
+```mermaid
+flowchart TD
+    A["ASC::HandleGameplayEvent(EventTag, Payload)"] --> B["触发 GameplayEventTriggeredAbilities"]
+    B --> C["GenericGameplayEventCallbacks 精确广播"]
+    B --> D["GameplayEventTagContainerDelegates 非精确广播"]
+    C --> E["WaitGameplayEvent callback"]
+    D --> E
+    E --> F["EventReceived.Broadcast"]
+    F --> G{"OnlyTriggerOnce?"}
+    G -->|是| H["EndTask"]
+    G -->|否| I["继续监听"]
+```
+
+- `WaitGameplayEvent::Activate` 按 `OnlyMatchExact` 选择绑定 exact callback 或 tag container delegate；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitGameplayEvent.cpp:29`。
+- ASC `HandleGameplayEvent` 同时处理 triggered abilities、exact callbacks 和 tag container delegates；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:2536`、`:2559`、`:2570`。
+
+## Montage Task 简化链
+
+```mermaid
+flowchart TD
+    A["PlayMontageAndWait::Activate"] --> B["ASC::PlayMontage"]
+    B --> C["ASC::PlayMontageInternal"]
+    C --> D["AnimInstance::Montage_Play"]
+    C --> E["LocalAnimMontageInfo / RepAnimMontageInfo 更新"]
+    A --> F["绑定 Ability cancel 与 Montage delegates"]
+    F --> G["OnBlendOut / OnInterrupted / OnCompleted / OnCancelled"]
+    G --> H["EndTask 或 StopPlayingMontage"]
+```
+
+- Task 通过 ASC 播放 montage 并绑定 AnimInstance delegates；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_PlayMontageAndWait.cpp:144`、`:152`、`:157`、`:160`。
+- ASC 播放 montage 后更新本地/复制 montage 信息，并在预测播放时绑定 rejected delegate；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3011`、`:3048`、`:3086`、`:3104`。
+- Task 销毁时移除 cancel delegate，Ability 结束且 `bStopWhenAbilityEnds` 时停止当前 montage；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_PlayMontageAndWait.cpp:204`、`:215`。
+
+## TargetData Task 简化链
+
+```mermaid
+flowchart TD
+    A["WaitTargetData Begin/FinishSpawningActor"] --> B["InitializeTargetActor"]
+    B --> C["绑定 TargetDataReady / Canceled"]
+    C --> D["FinalizeTargetActor -> StartTargeting"]
+    D --> E{"本地 TargetActor 产生数据?"}
+    E -->|确认| F["OnTargetDataReadyCallback"]
+    E -->|取消| G["OnTargetDataCancelledCallback"]
+    F --> H["FScopedPredictionWindow"]
+    G --> H
+    H --> I["CallServerSetReplicatedTargetData 或 ServerSetReplicatedTargetDataCancelled"]
+    I --> J["ASC AbilityTargetDataMap 缓存并广播 delegate"]
+    J --> K["服务端 WaitTargetData OnTargetDataReplicatedCallback"]
+    K --> L["ValidData / Cancelled Broadcast"]
+    L --> M["非 CustomMulti 时 EndTask"]
+```
+
+- TargetActor 初始化会绑定 `TargetDataReadyDelegate` / `CanceledDelegate`，并在 finalize 时 `StartTargeting`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:137`、`:145`、`:149`、`:158`。
+- 远端服务端路径绑定 ASC `AbilityTargetDataSetDelegate` / `AbilityTargetDataCancelledDelegate` 并等待 remote player data；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:211`、`:216`。
+- 客户端确认/取消通过 ASC replicated target data RPC 或 generic confirm/cancel event 进入服务端；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:288`、`:293`、`:323`、`:328`。
+
+## 监听类 Task 主链
+
+- GE applied task 绑定 ASC `OnGameplayEffectAppliedDelegateToSelf/Target` 或 periodic execute delegate；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitGameplayEffectApplied_Self.cpp:47`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitGameplayEffectApplied_Target.cpp:47`。
+- GE removed/stack task 绑定 ActiveGE handle 对应的 removed/stack delegate；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitGameplayEffectRemoved.cpp:42`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitGameplayEffectStackChange.cpp:39`。
+- Tag task 绑定 ASC `RegisterGameplayTagEvent`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitGameplayTagBase.cpp:17`。
+- Attribute task 绑定 ASC `GetGameplayAttributeValueChangeDelegate`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitAttributeChange.cpp:49`。
+
+## 第六轮未确认
+
+- `UAbilityTask_WaitMontageNotify` 在 UE5.6 当前 Tasks 目录未找到，未确认。
+- AbilityTask 预测失败后的完整自定义副作用回滚未展开，未确认。
+- GameplayCue 专用异步流程未展开，未确认。

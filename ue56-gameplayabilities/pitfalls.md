@@ -218,3 +218,64 @@
 
 - 源码注释明确 `PreAttributeChange` 用于 clamp，不用于触发“damage applied”这类 gameplay events；测试类关于死亡处理也说明可以在 AttributeSet 或 Actor 层，取舍依项目；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:211`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestAttributeSet.cpp:112`。
 - 开发实践推断：AttributeSet 更适合做属性约束、meta attribute 转换和轻量通知；复杂战斗流程应放到 Ability、GE/Execution、ASC/Character 或项目事件系统。
+
+# 常见坑：AbilityTask / GameplayTask 异步流程（第六轮）
+
+## AbilityTask 创建后忘记调用 ReadyForActivation
+
+- `NewAbilityTask` 只创建对象并调用 `InitTask`，不会自动执行派生 `Activate`；真正进入激活流程的是 `UGameplayTask::ReadyForActivation`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask.h:130`、`Engine/Source/Runtime/GameplayTasks/Private/GameplayTask.cpp:58`。
+- 开发实践推断：C++ 中手动创建 Task 后忘记 `ReadyForActivation`，Task delegate 不会被触发；蓝图节点由 `K2Node_LatentAbilityCall` 封装调用细节，本轮未展开；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask.h:23`。
+
+## Task 绑定 delegate 后没有在 OnDestroy / EndTask 中解绑
+
+- 源码注释要求 AbilityTask override `OnDestroy` 并 unregister callbacks，且 `UGameplayTask::OnDestroy` 注释要求最后调用 `Super::OnDestroy`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask.h:43`、`Engine/Source/Runtime/GameplayTasks/Classes/GameplayTask.h:291`。
+- 内置 Task 示例会在 `OnDestroy` 中移除 ASC/Ability/Anim/Attribute delegates；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitGameplayEvent.cpp:79`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_PlayMontageAndWait.cpp:204`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitAttributeChange.cpp:119`。
+
+## Ability 结束后 Task 仍然持有对象引用
+
+- Ability `EndAbility` 会对 `ActiveTasks` 调用 `TaskOwnerEnded`，`UAbilityTask::OnDestroy` 会清空 `Ability` 引用；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:819`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask.cpp:113`。
+- 开发实践推断：自定义 Task 如果在外部 delegate/timer/TargetActor 中遗留引用，就可能在 Ability 结束后回调失效对象；应按内置 Task 模式在 `OnDestroy` 解绑。
+
+## NonInstanced Ability 中使用需要状态的 AbilityTask
+
+- NonInstanced Ability 在 CDO 上执行，源码注释明确不能有状态；AbilityTask 又依赖 per-activation `ActiveTasks` 与 Ability/ASC 指针，这是不匹配的开发实践推断；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTypes.h:36`、`:45`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbility.h:820`。
+
+## InstancedPerExecution Ability 中依赖后续输入事件导致不可靠
+
+- ASC 输入路径对 `InstancedPerExecution` 发出 warning：输入交互只可能作用于最新生成实例，因此输入事件不可靠；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:2799`、`:2835`。
+- 开发实践推断：需要等待按下/释放、confirm/cancel、多帧 TargetData 的 Ability 更适合 `InstancedPerActor` 或明确管理实例生命周期。
+
+## Task 广播 delegate 后忘记结束，导致 Ability 一直 active
+
+- `UGameplayTask::EndTask` 才会进入 `OnDestroy` 和 deactivated 流程；Ability `EndAbility` 也只会清理仍在 `ActiveTasks` 中的 Task；源码路径：`Engine/Source/Runtime/GameplayTasks/Private/GameplayTask.cpp:167`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:819`。
+- 内置一次性 Task 通常广播后 `EndTask`，例如 `WaitInputPress`、`WaitDelay`、`WaitGameplayEffectRemoved`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitInputPress.cpp:45`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitDelay.cpp:43`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitGameplayEffectRemoved.cpp:72`。
+
+## Montage Task 中 Ability 取消但 Montage 没停
+
+- `PlayMontageAndWait` 在 `OnDestroy` 中只有当 `AbilityEnded && bStopWhenAbilityEnds` 时才调用 `StopPlayingMontage`，而显式 `ExternalCancel` 会广播 `OnCancelled` 并走 `Super::ExternalCancel`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_PlayMontageAndWait.cpp:195`、`:204`、`:215`。
+- `StopPlayingMontage` 还要求 ASC 当前 animating ability 和当前 montage 匹配，才会 `CurrentMontageStop`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_PlayMontageAndWait.cpp:247`、`:259`。
+
+## TargetData Task 中客户端确认了但服务端没收到
+
+- 客户端确认 TargetData 时通过 `CallServerSetReplicatedTargetData` 发送，服务端存入 `AbilityTargetDataMap` 并广播 `TargetSetDelegate`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:288`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3945`。
+- ASC 在 `CallServerSetReplicatedTargetData` 中会对无效 prediction key 打 warning；prediction key、AbilityHandle 或服务端监听 delegate 不匹配都会让 Task 等不到数据，这是基于源码路径的开发实践推断；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4217`、`:4237`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:211`。
+
+## WaitGameplayEvent tag 配错导致事件不触发
+
+- `WaitGameplayEvent` 默认 `OnlyMatchExact=true` 时只绑定 `GenericGameplayEventCallbacks.FindOrAdd(Tag)`；非精确匹配才走 `AddGameplayEventTagContainerDelegate`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitGameplayEvent.cpp:29`。
+- ASC `HandleGameplayEvent` 对 exact callback 用传入 `EventTag` 查找，对 container delegate 用 `EventTag.MatchesAny(SearchPair.Key)`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:2559`、`:2570`。
+
+## WaitAttributeChange 监听了错误 ASC 或错误 Attribute
+
+- `WaitAttributeChange` 使用 `OptionalExternalOwner` 时会改为监听外部 Actor 的 ASC，否则监听 owning Ability 的 ASC；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitAttributeChange.cpp:18`、`:114`。
+- 监听本身绑定 `GetGameplayAttributeValueChangeDelegate(Attribute)`，Attribute 选错或 ASC 选错都不会收到预期变化；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitAttributeChange.cpp:49`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:534`。
+
+## 预测场景下重复广播 delegate
+
+- AbilityTask 基类只检查 Ability 是否 active 后再广播，不会自动替自定义 Task 去重；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask.cpp:190`。
+- 预测文档说明客户端和服务端可能在不同时间执行同一逻辑，输入/TargetData 等 Task 通过 prediction window 与 replicated event/target data 协调；自定义 Task 的重复广播/回滚策略本轮未完整展开，未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:72`、`:192`。
+
+## 在 AbilityTask 中写过多业务逻辑，导致复用困难
+
+- 源码定义 AbilityTask 是 small、self-contained operation，模式是 start-and-wait；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask.h:20`。
+- 开发实践推断：Task 更适合封装异步等待、delegate 转发、预测/RPC 小段接入；复杂伤害、死亡、冷却、GE 配置、UI 状态机不应塞进 Task。

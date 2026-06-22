@@ -32,6 +32,7 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 - `call-flows.md`：调用链笔记，已覆盖 Ability 激活链、Ability 生命周期、GameplayEffect 应用链。
 - `gameplay-effects.md`：第四轮 GameplayEffect 专题，覆盖 `UGameplayEffect`、`FGameplayEffectSpec`、`FActiveGameplayEffect`、Modifier、Duration/Period、Stacking、GameplayCue、Cost/Cooldown 接入和 GEComponents 概览。
 - `attributes.md`：第五轮 AttributeSet 专题，覆盖 `UAttributeSet`、`FGameplayAttributeData`、`FGameplayAttribute`、ASC 管理 AttributeSet、属性定义/复制、属性回调、GE 修改 Attribute、Base/Current、Damage/Healing 和 UI delegate 绑定。
+- `ability-tasks.md`：第六轮 AbilityTask / GameplayTask 专题，覆盖 `UAbilityTask`、`UGameplayTask`、`UGameplayTasksComponent`、Ability `ActiveTasks`、常见 Task 分类、输入/事件/蒙太奇/TargetData/GE/Tag/Attribute 监听流程和预测接入点。
 - `pitfalls.md`：常见坑清单，按轮次补充 ASC、Ability、GameplayEffect 相关问题。
 
 ## 优先分析顺序
@@ -40,7 +41,7 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 
 下一轮推荐入口：
 
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask.h`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask.cpp`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbility.h`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueManager.h`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_Actor.h`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_Static.h`

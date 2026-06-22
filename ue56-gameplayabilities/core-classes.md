@@ -275,3 +275,30 @@ ASC `BlockedAbilityTags` 的关系：Ability 的 `BlockAbilitiesWithTag` 通过 
 - `FGameplayAttributeValueChange` 精确类型名未确认；源码实际确认的是 `FOnAttributeChangeData` 与 `FOnGameplayAttributeValueChange`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:1002`、`:1017`。
 - “Meta Attribute” 不是本轮源码确认的固定类型，作为 GAS 项目实践未确认。
 - 客户端预测失败后 Attribute/GE/delegate 的完整回滚路径未展开，未确认。
+
+# 核心类：AbilityTask / GameplayTask 体系（第六轮）
+
+完整专题见 `ability-tasks.md`。本节保留核心索引，便于从 Ability 生命周期跳转到异步任务层。
+
+## 类定位索引
+
+- `UGameplayTask` 是 GameplayTasks 模块的通用异步任务基类，继承 `UObject` 并实现 `IGameplayTaskOwnerInterface`；源码路径：`Engine/Source/Runtime/GameplayTasks/Classes/GameplayTask.h:145`。
+- `UAbilityTask` 继承 `UGameplayTask`，是 GAS 中 Ability 执行期的 latent/asynchronous operation；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask.h:20`、`:90`。
+- `UGameplayTasksComponent` 维护任务激活、deactivate、known/ticking tasks；`UAbilitySystemComponent` 继承自它，因此 AbilityTask 在 Ability 中拿到的 GameplayTasksComponent 通常就是 ASC；源码路径：`Engine/Source/Runtime/GameplayTasks/Classes/GameplayTasksComponent.h:61`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:109`。
+- `UGameplayAbility` 实现 `IGameplayTaskOwnerInterface`，在 `OnGameplayTaskInitialized` 中把 Task 的 Ability/ASC 指针写好，并用 `ActiveTasks` 跟踪活跃任务；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbility.h:110`、`:820`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:1539`。
+- Ability 结束时会对所有 `ActiveTasks` 调用 `TaskOwnerEnded` 并清空数组；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:819`。
+
+## AbilityTask 开发速查
+
+- 自定义 AbilityTask 继承 `UAbilityTask`，不要用 `UGameplayTask::NewTask`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask.h:90`、`:153`。
+- 静态工厂函数只创建任务和保存输入参数，真正开始等待/绑定 delegate 要放到 `Activate`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask.h:28`、`:35`、`:44`。
+- 调用方绑定输出 delegate 后调用 `ReadyForActivation`，该函数进入 GameplayTask 激活流程；源码路径：`Engine/Source/Runtime/GameplayTasks/Classes/GameplayTask.h:157`、`Engine/Source/Runtime/GameplayTasks/Private/GameplayTask.cpp:58`。
+- 广播前使用 `ShouldBroadcastAbilityTaskDelegates`，确保 Ability 仍 active；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask.cpp:190`。
+- `OnDestroy` 负责解绑 task 注册的 callbacks/timers/TargetActor，并最后调用 `Super::OnDestroy`；源码路径：`Engine/Source/Runtime/GameplayTasks/Classes/GameplayTask.h:291`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask.h:43`。
+- 需要预测时再使用 `FScopedPredictionWindow`、generic replicated events 或 target data replicated delegates；AbilityTask 基类只提供 helper，不保证所有任务自动预测；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask.cpp:182`、`:217`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:192`。
+
+## 第六轮未确认项
+
+- `UAbilityTask_WaitMontageNotify` 在 UE5.6 当前 Tasks 目录未找到，未确认。
+- AbilityTask 与普通 Blueprint latent node 的完整差异未展开，源码只确认 `K2Node_LatentAbilityCall` 支持 AbilityTask 蓝图体验；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask.h:23`。
+- 预测失败后自定义 AbilityTask 副作用的完整回滚规则未展开，未确认。

@@ -279,3 +279,70 @@
 
 - 源码定义 AbilityTask 是 small、self-contained operation，模式是 start-and-wait；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask.h:20`。
 - 开发实践推断：Task 更适合封装异步等待、delegate 转发、预测/RPC 小段接入；复杂伤害、死亡、冷却、GE 配置、UI 状态机不应塞进 Task。
+
+# 常见坑：GameplayCue 体系（第七轮）
+
+## GameplayCueTag 没有和 Notify 正确绑定
+
+- CueSet 通过 `GameplayCueDataMap` 查 cue tag，找不到或映射为 `INDEX_NONE` 时直接返回 false；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueSet.cpp:78`、`:80`、`:90`。
+- Manager 扫描资产时要求资产注册表里的 `GameplayCueName` 能转换成有效 GameplayTag，否则会记录 warning 并不加入全局集合；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:944`、`:974`、`:999`。
+
+## GameplayEffect 配了 GameplayCue 但 DurationPolicy 理解错误
+
+- Instant/periodic execute 触发 `Executed`；Duration/Infinite 添加时触发 `OnActive`/`WhileActive`，移除时触发 `Removed`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:963`、`:966`、`:969`、`:972`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3205`、`:4434`、`:4734`。
+- 把持续特效配在只能响应 `Executed` 的路径上，通常不会得到正确的移除回调，这是开发实践推断；源码依据：`Executed` 注释用于 instant effects 或 periodic ticks；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:969`。
+
+## ExecuteGameplayCue 用来做持续特效导致无法正确移除
+
+- `ExecuteGameplayCue` 只生成 `Executed` 事件，不进入 `ActiveGameplayCues` 持续容器；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1300`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:1417`。
+- 持续 cue 应使用 `AddGameplayCue`/`RemoveGameplayCue` 或 Duration/Infinite GE 生命周期；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1312`、`:1401`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4411`、`:4714`。
+
+## AddGameplayCue 后忘记 RemoveGameplayCue
+
+- `AddGameplayCue` 会向 `FActiveGameplayCueContainer` 添加 cue 并增加 tag count，`RemoveCue` 才会减少 tag count 并触发 `Removed`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueInterface.cpp:305`、`:327`、`:330`、`:375`。
+- Ability 直接 Add cue 时可用 `bRemoveOnAbilityEnd` 自动加入 `TrackedGameplayCues`，Ability 结束会清理；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:1721`、`:1738`、`:852`。
+
+## GameplayCueNotify_Actor 持有状态但没有正确清理
+
+- Actor notify 回收时会清事件标记、owner delegate、latent action、timer、owner、隐藏和 detach；自定义状态也需要按同样思路清理是开发实践推断；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueNotify_Actor.cpp:389`、`:397`、`:431`、`:437`、`:441`。
+- `GameplayCueFinishedCallback` 会通知 Manager 回收/销毁；不结束的 Actor notify 会占用实例或残留状态；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueNotify_Actor.cpp:361`、`:381`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:565`。
+
+## Looping Cue 没有处理 Removed
+
+- `AGameplayCueNotify_Looping::OnRemove_Implementation` 会调用 `RemoveLoopingEffects`，后者停止 LoopingEffects；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueNotify_Looping.cpp:108`、`:133`、`:142`。
+- 如果持续效果只处理 `OnActive/WhileActive` 而不处理 `Removed`，looping particles/audio 可能不停止，这是开发实践推断；源码依据：LoopingEffects 的停止只在 `RemoveLoopingEffects` 路径；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueNotify_Looping.cpp:39`、`:110`。
+
+## Static Cue 中试图保存实例状态
+
+- Static notify 通过 `LoadedGameplayCueClass->GetDefaultObject(false)` 的 CDO 处理事件，不为每次 cue 生成实例；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueSet.cpp:306`。
+- 在 Static/Burst Notify 中保存每次触发状态会被共享，这是开发实践推断；需要状态或 latent 时使用 Actor/BurstLatent/Looping；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_Burst.h:16`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_BurstLatent.h:16`。
+
+## GameplayCue 在预测场景下重复播放
+
+- ASC 的 NetMulticast cue implementation 会跳过 local client prediction key，ActiveGE 复制也会检查本地预测 effect 以避免重复触发 cue；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1438`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2745`、`:2751`。
+- 完整预测失败后的 GameplayCue 回滚/重放规则本轮未展开，未确认；源码确认存在 `OnPredictiveGameplayCueCatchup` 处理预测 catchup；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1797`。
+
+## Minimal replication mode 下误以为 ActiveGE 会完整复制 Cue
+
+- Minimal replication 下 GE cue 会走 `AddGameplayCue_MinimalReplication` / `RemoveGameplayCue_MinimalReplication`，因为 ActiveGE 不按 Full 模式完整复制给所有客户端；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4418`、`:4424`、`:4720`、`:4724`。
+- `MinimalReplicationGameplayCues` 复制条件为 `COND_SkipOwner`，且容器在 Full replication mode 下不复制；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1655`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueInterface.cpp:452`。
+
+## Cue 参数里 Source / Instigator / EffectCauser 理解错误
+
+- `FGameplayCueParameters::GetInstigator/GetEffectCauser/GetSourceObject` 优先读显式字段，缺失时回退到 `EffectContext`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectTypes.cpp:1284`、`:1295`、`:1306`。
+- ASC 默认参数只把 OwnerActor 填入 `Instigator`，AvatarActor 填入 `EffectCauser`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1209`。
+
+## GameplayCue 写了过多业务逻辑，导致表现层和战斗逻辑耦合
+
+- GE 上的 `GameplayCues` 注释描述的是 sounds、particle effects 等非模拟反应，cue RPC 也是 unreliable；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2297`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:880`。
+- 开发实践推断：GameplayCue 应主要承载表现，不要把伤害结算、死亡、奖励、库存等权威业务放在 cue notify 中；dedicated server 还可能 suppress cosmetic cue；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:177`。
+
+## 客户端没有加载 Cue 资产导致不播放
+
+- CueSet 发现 `LoadedGameplayCueClass` 为空时会尝试 resolve，仍为空则交给 Manager 的 missing cue 处理；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueSet.cpp:279`、`:289`、`:296`。
+- Manager 默认不同步加载缺失 cue、默认异步加载并把事件排队；如果加载失败会 warning，事件不会立即播放；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:321`、`:326`、`:352`、`:378`。
+
+## 父子 GameplayTag 匹配和精确匹配理解错误
+
+- CueSet 会为没有精确 notify 的子 tag 指向父 tag notify；notify 的 `IsOverride=false` 时还会继续调用父级 data；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueSet.cpp:386`、`:397`、`:312`、`:343`。
+- 因此 `GameplayCue.Damage.Fire` 可能触发父级 `GameplayCue.Damage` notify；这不是精确匹配 bug，而是 CueSet 加速 map 与 override 语义；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueSet.cpp:401`。

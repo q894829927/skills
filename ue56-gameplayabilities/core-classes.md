@@ -302,3 +302,31 @@ ASC `BlockedAbilityTags` 的关系：Ability 的 `BlockAbilitiesWithTag` 通过 
 - `UAbilityTask_WaitMontageNotify` 在 UE5.6 当前 Tasks 目录未找到，未确认。
 - AbilityTask 与普通 Blueprint latent node 的完整差异未展开，源码只确认 `K2Node_LatentAbilityCall` 支持 AbilityTask 蓝图体验；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask.h:23`。
 - 预测失败后自定义 AbilityTask 副作用的完整回滚规则未展开，未确认。
+
+# 核心类：GameplayCue 体系（第七轮）
+
+完整专题见 `gameplay-cues.md`。本节保留核心索引，便于从 ASC / GameplayEffect / Ability 跳转到表现事件层。
+
+## 类定位索引
+
+- GameplayCue 以 `GameplayCue` 分类下的 `FGameplayTag` 为事件键，`FGameplayEffectCue` 把 GE level/magnitude 与一个或多个 cue tag 关联；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:578`、`:613`。
+- `UGameplayCueManager` 是 `UDataAsset` 类型的全局 cue 分发和 notify spawn/recycle 管理器；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueManager.h:128`、`:130`。
+- `UGameplayCueSet` 保存 `FGameplayCueNotifyData` 数组和 tag->index 加速 map，负责把 cue tag 路由到 `UGameplayCueNotify_Static` 或 `AGameplayCueNotify_Actor`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueSet.h:52`、`:92`、`:95`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueSet.cpp:259`。
+- `UGameplayCueNotify_Static` 是非实例化 UObject notify，适合无状态 one-off；`AGameplayCueNotify_Actor` 是实例化 Actor notify，可持有状态并由 Manager 复用或 spawn；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_Static.h:14`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_Actor.h:15`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:459`。
+- UE5.6 当前源码确认存在 `UGameplayCueNotify_Burst`、`AGameplayCueNotify_BurstLatent`、`AGameplayCueNotify_Looping`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_Burst.h:19`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_BurstLatent.h:19`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_Looping.h:19`。
+- ASC 提供 `ExecuteGameplayCue`、`AddGameplayCue`、`RemoveGameplayCue` 和 NetMulticast RPC；手动 persistent cue 进入 `ActiveGameplayCues`，minimal replication 下 GE cue 可进入 `MinimalReplicationGameplayCues`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:910`、`:914`、`:921`、`:1883`、`:1887`。
+- `FGameplayCueParameters` 是 cue 参数载体，包含 magnitude、EffectContext、聚合 tags、location/normal、instigator、causer、source object 等，并实现 `NetSerialize`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:834`、`:857`、`:865`、`:877`、`:893`、`:928`。
+
+## GameplayCue 开发速查
+
+- 一次性表现使用 `ExecuteGameplayCue` 或 Instant/periodic GE 的 `GameplayCues`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:969`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1300`。
+- 持续表现使用 Duration/Infinite GE 的 `GameplayCues`，或手动 `AddGameplayCue` 并配对 `RemoveGameplayCue`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4411`、`:4714`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1312`、`:1401`。
+- Static/Burst 用于无状态 one-off；Actor/BurstLatent 用于需要 latent 或状态的 one-off；Looping 用于持续效果；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_Burst.h:16`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_BurstLatent.h:16`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_Looping.h:16`。
+- Cue tag 命名放在 `GameplayCue.*` 层级是开发实践推断；源码依据是 GE cue tag 属性限制 `Categories="GameplayCue"`，CueSet base tag 为 `GameplayCue`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:613`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueSet.cpp:15`。
+- 排查 cue 不播放时先查 tag 是否有效、notify 是否被 `GameplayCueNotifyPaths` 扫描、目标 Avatar 是否 ready、Manager/ASC 是否 suppression；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:974`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:609`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1215`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:177`。
+
+## 第七轮未确认项
+
+- `GameplayCue_Types.cpp` 在当前源码树不存在，未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCue_Types.cpp`。
+- GameplayCue 编辑器工具、完整网络预测回滚、Niagara/Audio 底层、本轮未展开，未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueNotifyTypes.cpp`。
+- `GameplayCueComponent` 或等价 GameplayEffectComponent 在当前 `GameplayEffectComponents` 目录未确认；确认路径仍是 `UGameplayEffect::GameplayCues`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2299`。

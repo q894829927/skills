@@ -476,3 +476,96 @@ flowchart TD
 - `UAbilityTask_WaitMontageNotify` 在 UE5.6 当前 Tasks 目录未找到，未确认。
 - AbilityTask 预测失败后的完整自定义副作用回滚未展开，未确认。
 - GameplayCue 专用异步流程未展开，未确认。
+
+# GameplayCue 调用链（第七轮）
+
+完整专题见 `gameplay-cues.md`。本节只保留 ASC 手动触发与 GameplayEffect 自动触发两条主链。
+
+## ASC 手动触发 Cue
+
+```mermaid
+flowchart TD
+    A["Ability / 业务调用 ASC Execute/Add/Remove"] --> B{"Cue 类型"}
+    B -->|Execute| C["ASC::ExecuteGameplayCue"]
+    C --> D["GameplayCueManager::InvokeGameplayCueExecuted"]
+    D --> E["AddPendingCueExecuteInternal"]
+    E --> F["FlushPendingCues"]
+    F --> G{"Authority / LocalPrediction"}
+    G -->|Authority| H["ReplicationInterface NetMulticast Executed"]
+    G -->|LocalPrediction| I["ASC::InvokeGameplayCueEvent Executed"]
+    B -->|Add| J["ASC::AddGameplayCue_Internal"]
+    J --> K["FActiveGameplayCueContainer::AddCue"]
+    K --> L["UpdateTagMap + NetMulticast Added"]
+    L --> M["OnActive / WhileActive"]
+    B -->|Remove| N["ASC::RemoveGameplayCue_Internal"]
+    N --> O["FActiveGameplayCueContainer::RemoveCue"]
+    O --> P["UpdateTagMap -1 + Removed"]
+    H --> Q["ASC::InvokeGameplayCueEvent"]
+    I --> Q
+    M --> Q
+    P --> Q
+    Q --> R["GameplayCueManager::HandleGameplayCue"]
+    R --> S["GameplayCueSet / GameplayCueInterface / Notify"]
+```
+
+- `ExecuteGameplayCue` 不直接路由 notify，而是交给 Manager wrapper，Manager 用 pending 队列和 `FlushPendingCues` 统一处理 RPC/预测本地执行；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1300`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:1417`、`:1467`、`:1500`。
+- `AddGameplayCue` 会添加 `FActiveGameplayCue`、更新 ASC tag map，并通过 unreliable NetMulticast 触发 `OnActive`；第一次加入时还会本地触发 `WhileActive`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1339`、`:1351`、`:1378`、`:1385`。
+- `RemoveGameplayCue` 由 `FActiveGameplayCueContainer::RemoveCue` 更新 tag count 并触发 `Removed`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1411`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueInterface.cpp:330`、`:375`。
+- `InvokeGameplayCueEvent` 最终把 AvatarActor、cue tag、事件类型和参数传给 `UGameplayCueManager::HandleGameplayCue`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1287`、`:1295`。
+
+## GameplayEffect 触发 Cue
+
+```mermaid
+flowchart TD
+    A["UGameplayEffect::GameplayCues"] --> B["ASC::ApplyGameplayEffectSpecToSelf"]
+    B --> C{"DurationPolicy"}
+    C -->|Instant 非预测| D["ASC::ExecuteGameplayEffect"]
+    D --> E["ActiveGEContainer::ExecuteActiveEffectsFrom"]
+    E --> F["InvokeGameplayCueExecuted_FromSpec"]
+    C -->|Instant 本地预测| G["Treat as Infinite + 预测 Executed Cue"]
+    G --> F
+    C -->|Duration / Infinite| H["ActiveGEContainer::ApplyGameplayEffectSpec"]
+    H --> I["AddActiveGameplayEffectGrantedTagsAndModifiers"]
+    I --> J{"Minimal/Mixed replication?"}
+    J -->|是| K["ASC::AddGameplayCue_MinimalReplication"]
+    J -->|否| L["UpdateTagMap + OnActive/WhileActive"]
+    H --> M["Periodic timer"]
+    M --> E
+    N["ActiveGE 移除"] --> O["RemoveActiveGameplayEffectGrantedTagsAndModifiers"]
+    O --> P{"Minimal/Mixed replication?"}
+    P -->|是| Q["RemoveGameplayCue_MinimalReplication"]
+    P -->|否| R["UpdateTagMap -1 + Removed"]
+```
+
+- Instant 非预测 GE 通过 `ExecuteGameplayEffect -> ExecuteActiveEffectsFrom` 触发 `Executed` cue；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:950`、`:1000`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3065`、`:3205`。
+- 本地预测 Instant GE 会先按 Infinite duration 加入 ActiveGE，再显式预测 `Executed` cue；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:862`、`:940`、`:945`。
+- Duration/Infinite GE 添加时，非 minimal 路径会对 cue tags 做 pseudo-add 并触发 `OnActive`/`WhileActive`；minimal/mixed 路径会调用 `AddGameplayCue_MinimalReplication`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4411`、`:4418`、`:4424`、`:4429`、`:4434`。
+- ActiveGE 移除时，非 minimal 路径做 pseudo-remove 并触发 `Removed`；minimal/mixed 路径走 `RemoveGameplayCue_MinimalReplication`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4714`、`:4720`、`:4724`、`:4729`、`:4734`。
+- Periodic GE tick 调 `ExecutePeriodicGameplayEffect -> InternalExecutePeriodicGameplayEffect -> ExecuteActiveEffectsFrom`，因此可触发 `Executed` cue；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:995`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3227`、`:4464`、`:4486`。
+
+## Manager 路由简化链
+
+```mermaid
+flowchart TD
+    A["GameplayCueManager::HandleGameplayCue"] --> B["ShouldSuppressGameplayCues"]
+    B --> C["TranslateGameplayCue"]
+    C --> D["RouteGameplayCue"]
+    D --> E["IGameplayCueInterface::ShouldAcceptGameplayCue"]
+    E --> F["Runtime GameplayCueSet::HandleGameplayCue"]
+    F --> G["GameplayCueDataMap exact/parent match"]
+    G --> H{"Notify 类型"}
+    H -->|Static| I["CDO HandleGameplayCue"]
+    H -->|Actor| J["GetInstancedCueActor"]
+    J --> K["existing child / recycled / spawn"]
+    I --> L["OnExecute / OnActive / WhileActive / OnRemove"]
+    K --> L
+    D --> M["IGameplayCueInterface::HandleGameplayCue"]
+```
+
+- Manager 的 route 顺序是 suppression、translation、runtime CueSet、GameplayCueInterface；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:140`、`:164`、`:169`、`:190`、`:235`、`:241`。
+- CueSet 的加速 map 支持子 tag 回退父 tag；重复 exact notify 会被跳过，父级继续执行受 `IsOverride` 控制；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueSet.cpp:102`、`:312`、`:366`、`:386`、`:401`。
+
+## 第七轮未确认
+
+- 完整预测失败后的 GameplayCue 回滚、去重、重放规则未展开，未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1797`。
+- GameplayCue 编辑器工具和 Niagara/Audio 底层未展开，未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueNotifyTypes.cpp`。

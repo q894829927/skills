@@ -247,3 +247,31 @@ ASC `BlockedAbilityTags` 的关系：Ability 的 `BlockAbilitiesWithTag` 通过 
 - UE5.6 中很多旧 GE 字段已标记 deprecated，当前主路径是 `GEComponents`：Asset tags、Target granted tags、Blocked ability tags、Target tag requirements、ChanceToApply、CustomCanApply、Immunity、RemoveOther、GrantedAbilities 都有对应组件；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2423`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponent.h:17`。
 - `GameplayCues` 本轮确认仍是 `UGameplayEffect` 上的字段，未确认存在 `GameplayCueComponent`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2299`。
 - `GrantAbilitiesGameplayEffectComponent` 这个精确类名未确认；UE5.6 实际存在的是 `UAbilitiesGameplayEffectComponent`，DisplayName 为 “Grant Gameplay Abilities”；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/AbilitiesGameplayEffectComponent.h:37`、`:38`。
+
+# 核心类：AttributeSet 体系（第五轮）
+
+完整专题见 `attributes.md`。本节保留核心索引，便于从 ASC / GE / Ability 文档跳转到属性层。
+
+## 类定位索引
+
+- `UAttributeSet` 是 `UObject` 子类，用来定义 gameplay attributes；源码注释要求项目继承并添加 `FGameplayAttributeData` 属性，AttributeSet 作为 Actor subobject 注册到 ASC；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:176`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:183`。
+- `FGameplayAttributeData` 保存 `BaseValue` 与 `CurrentValue`，源码明确建议优先使用它而不是裸 `float`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:19`、`:34`、`:40`。
+- `FGameplayAttribute` 是 AttributeSet 内属性的描述/句柄，GE modifier、ASC 查询和 attribute delegate 都以它定位属性；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:57`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AttributeSet.cpp:355`。
+- `UAbilitySystemComponent` 通过 `SpawnedAttributes` 管理 AttributeSet，并在 `ReplicateSubobjects` 中复制有效 AttributeSet subobject；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:1957`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1710`。
+- GameplayEffect 修改属性时，Instant/periodic execute 通过 `InternalExecuteMod` 进入 AttributeSet 的 `PreGameplayEffectExecute` / `PostGameplayEffectExecute`；Duration/Infinite modifier 通常注册到 `FAggregator` 并更新 current value；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3907`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4347`。
+
+## AttributeSet 开发速查
+
+- 定义属性看 `FGameplayAttributeData` 和 `GAMEPLAYATTRIBUTE_*` 宏；`ATTRIBUTE_ACCESSORS` 只是源码注释中的项目侧示例，UE5.6 实际提供 `ATTRIBUTE_ACCESSORS_BASIC`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:21`、`:430`、`:467`。
+- 初始化属性可看 `InitStats` / `InitFromMetaDataTable`，但 `InitStats` 注释写明“不太受支持”；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:166`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AttributeSet.cpp:383`。
+- 修改属性优先走 GameplayEffect 或 ASC `SetNumericAttributeBase`，不要绕过 GAS 直接改成员值；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3973`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:386`。
+- 监听属性变化用 ASC `GetGameplayAttributeValueChangeDelegate`，参数是 `FOnAttributeChangeData`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:534`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:1002`。
+- Clamp current value 放 `PreAttributeChange`，clamp base value 放 `PreAttributeBaseChange`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:211`、`:225`。
+- Damage Meta Attribute 是开发实践推断，不是本轮源码确认的固定类型；测试 AttributeSet 把 `Damage` 当作非持久属性，并在 `PostGameplayEffectExecute` 中转为 `Health -= Damage`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemTestAttributeSet.h:36`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestAttributeSet.cpp:100`。
+- Replication 至少检查 AttributeSet 是否加入 ASC、属性是否声明复制、RepNotify 是否调用 `GAMEPLAYATTRIBUTE_REPNOTIFY`、预测属性是否使用 `REPNOTIFY_Always`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:3005`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:404`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:127`。
+
+## 第五轮未确认项
+
+- `FGameplayAttributeValueChange` 精确类型名未确认；源码实际确认的是 `FOnAttributeChangeData` 与 `FOnGameplayAttributeValueChange`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:1002`、`:1017`。
+- “Meta Attribute” 不是本轮源码确认的固定类型，作为 GAS 项目实践未确认。
+- 客户端预测失败后 Attribute/GE/delegate 的完整回滚路径未展开，未确认。

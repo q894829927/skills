@@ -272,3 +272,85 @@ flowchart TD
 
 - GameplayEffect 预测失败、服务器纠正、客户端回滚的完整路径未展开，未确认。
 - GameplayCue 的完整 manager 路由和 GameplayCueNotify 加载/匹配规则未展开，未确认。
+
+# Attribute 修改调用链（第五轮）
+
+完整专题见 `attributes.md`。本节只保留从 GameplayEffect 到 AttributeSet/Delegate/Replication 的主链路。
+
+```mermaid
+flowchart TD
+    A["UAbilitySystemComponent::ApplyGameplayEffectSpecToSelf"] --> B["FGameplayEffectSpec: Context / Level / Capture / SetByCaller"]
+    B --> C{"Instant 或 ActiveGE"}
+    C -->|Instant / Periodic execute| D["ExecuteActiveEffectsFrom"]
+    D --> E["InternalExecuteMod"]
+    E --> F["AttributeSet::PreGameplayEffectExecute"]
+    F --> G["ApplyModToAttribute"]
+    G --> H["SetAttributeBaseValue"]
+    H --> I["PreAttributeBaseChange -> BaseValue 写入 -> PostAttributeBaseChange"]
+    I --> J["Aggregator dirty 或直接 InternalUpdateNumericalAttribute"]
+    C -->|Duration / Infinite| K["ApplyGameplayEffectSpec 添加 FActiveGameplayEffect"]
+    K --> L["CaptureAttributeDataFromTarget + CalculateModifierMagnitudes"]
+    L --> M["FindOrCreateAttributeAggregator + AddAggregatorMod"]
+    M --> J
+    J --> N["ASC::SetNumericAttribute_Internal"]
+    N --> O["FGameplayAttribute::SetNumericValueChecked"]
+    O --> P["PreAttributeChange -> CurrentValue 写入 -> PostAttributeChange"]
+    P --> Q["FOnGameplayAttributeValueChange broadcast"]
+    Q --> R["属性复制 / OnRep / GAMEPLAYATTRIBUTE_REPNOTIFY"]
+    R --> S["SetBaseAttributeValueFromReplication -> 重新聚合并广播"]
+```
+
+## 关键步骤标注
+
+1. ASC `ApplyGameplayEffectSpecToSelf` 做权限、PredictionKey、GE CanApply、Instant vs ActiveGE 分支；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:798`。
+2. `MakeOutgoingSpec` 使用 GE CDO、Context、Level 构造 `FGameplayEffectSpec`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:451`。
+3. Instant 非预测路径调用 `ExecuteGameplayEffect`，随后 ActiveGE 容器的 `ExecuteActiveEffectsFrom` 执行 modifiers/executions；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:952`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3065`。
+4. `InternalExecuteMod` 构造 `FGameplayEffectModCallbackData`，调用 `PreGameplayEffectExecute`，再 `ApplyModToAttribute`，最后 `PostGameplayEffectExecute`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3907`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectExtension.h:17`。
+5. `ApplyModToAttribute` 根据当前 base 和 mod op 算出新 base，并调用 `SetAttributeBaseValue`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3973`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectAggregator.cpp:447`。
+6. `SetAttributeBaseValue` 调用 `PreAttributeBaseChange`，更新 `FGameplayAttributeData::BaseValue` 或 aggregator base，再调用 `PostAttributeBaseChange`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3803`。
+7. Duration / Infinite GE 添加 ActiveGE 后，会 capture target attributes、计算 modifier magnitude，并把 modifier 加到 `FAggregator`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4158`、`:4347`。
+8. Aggregator dirty 后 `OnAttributeAggregatorDirty` 重新 Evaluate，并调用 `InternalUpdateNumericalAttribute`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3307`、`:3365`。
+9. `InternalUpdateNumericalAttribute` 调 ASC `SetNumericAttribute_Internal`，后者通过 `FGameplayAttribute::SetNumericValueChecked` 写 current value，触发 `PreAttributeChange` / `PostAttributeChange`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3765`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:402`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AttributeSet.cpp:77`。
+10. 同一函数会广播 `FOnGameplayAttributeValueChange`，参数是 `FOnAttributeChangeData`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3790`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:1002`。
+11. Attribute RepNotify 应调用 `GAMEPLAYATTRIBUTE_REPNOTIFY`，进入 ASC `SetBaseAttributeValueFromReplication` 后重新聚合 final/current value；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:404`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:812`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3566`。
+
+## 简化伪代码
+
+```cpp
+Handle = ASC.ApplyGameplayEffectSpecToSelf(Spec, PredictionKey);
+
+if (Spec.Def->DurationPolicy == Instant && !bPredictedInstant)
+{
+    ActiveEffects.ExecuteActiveEffectsFrom(Spec);
+    for (EvaluatedMod : ModifiersAndExecutions)
+    {
+        Data = FGameplayEffectModCallbackData(Spec, EvaluatedMod, ASC);
+        if (!Set->PreGameplayEffectExecute(Data)) continue;
+
+        ActiveEffects.ApplyModToAttribute(Attribute, Op, Magnitude, &Data);
+        Set->PostGameplayEffectExecute(Data);
+    }
+}
+else
+{
+    ActiveEffect = ActiveEffects.ApplyGameplayEffectSpec(Spec);
+    ActiveEffect.Spec.CaptureAttributeDataFromTarget(ASC);
+    ActiveEffect.Spec.CalculateModifierMagnitudes();
+    Aggregator = ActiveEffects.FindOrCreateAttributeAggregator(Attribute);
+    Aggregator.AddAggregatorMod(Magnitude, Op, Channel, SourceTags, TargetTags, bPredicted, Handle);
+}
+
+// Attribute writeback
+ActiveEffects.InternalUpdateNumericalAttribute(Attribute, NewCurrent, ModData);
+```
+
+## BaseValue 与 CurrentValue
+
+- `BaseValue` 是永久基础值，`CurrentValue` 包含临时 buff；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:34`、`:40`。
+- `GetNumericAttribute` 读取 current/final value；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:409`。
+- `SetNumericAttributeBase` 修改 base value，现有 active modifiers 不清除；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:224`。
+
+## 第五轮未确认
+
+- `FGameplayAttributeValueChange` 精确类型名未确认；源码确认的是 `FOnAttributeChangeData` / `FOnGameplayAttributeValueChange`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:1002`、`:1017`。
+- 客户端预测失败后的 Attribute/GE/delegate 完整回滚链路未展开，未确认。

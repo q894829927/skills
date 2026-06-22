@@ -162,3 +162,59 @@
 ## UE5.6 GEComponents 迁移导致旧字段误用
 
 - `InheritableGameplayEffectTags`、`InheritableOwnedTagsContainer`、`OngoingTagRequirements`、`ApplicationTagRequirements`、`GrantedApplicationImmunityQuery`、`GrantedAbilities` 等旧字段在 UE5.6 已标记 deprecated，并指向对应 GEComponent；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2311`、`:2316`、`:2327`、`:2332`、`:2353`、`:2401`。
+
+# 常见坑：AttributeSet 体系（第五轮）
+
+## AttributeSet 创建了但没有加入 ASC 管理
+
+- ASC 只从 `SpawnedAttributes` 查找 AttributeSet，`GetAttributeSubobject` 会遍历 `GetSpawnedAttributes()`；如果项目自己创建 AttributeSet 但没有 `AddAttributeSetSubobject` / `AddSpawnedAttribute`，ASC 查询、GE modifier 和复制路径都可能找不到它；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:126`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:152`。
+- `AddSpawnedAttribute` 还负责把 subobject 加入 replicated subobject list 并标记 `SpawnedAttributes` dirty；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:3005`。
+
+## AttributeSet subobject 复制了，但具体 Attribute 没有正确复制
+
+- `SpawnedAttributes` 复制和 `ReplicateSubobjects` 只保证 AttributeSet 对象/列表参与复制；具体 Health/Mana 属性仍要在 AttributeSet 类上配置复制；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1637`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1710`。
+- GAS 预测说明示例要求属性使用 `DOREPLIFETIME_CONDITION_NOTIFY(..., REPNOTIFY_Always)`；该宏属于 UE 通用复制系统，本轮未展开；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:127`、`:138`。
+
+## 属性声明了 ReplicatedUsing 但没有 DOREPLIFETIME
+
+- `ReplicatedUsing` / `DOREPLIFETIME` 属于 UE 通用复制系统，本轮未展开；GAS 侧确认的是 RepNotify 内应调用 `GAMEPLAYATTRIBUTE_REPNOTIFY`，且预测属性建议 `REPNOTIFY_Always`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:396`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:138`。
+
+## OnRep_XXX 里忘记使用 GAMEPLAYATTRIBUTE_REPNOTIFY
+
+- `GAMEPLAYATTRIBUTE_REPNOTIFY` 会把复制来的属性值交给 owning ASC 的 `SetBaseAttributeValueFromReplication`，用于更新 base/final value 和 delegate；忘记调用会绕过 GAS 的预测修正与 attribute delegate 路径；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:404`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:812`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3566`。
+
+## 直接 Set 属性值绕过 GAS 流程
+
+- `GAMEPLAYATTRIBUTE_VALUE_SETTER` 都是转回 ASC `SetNumericAttributeBase`，GE 修改也通过 ActiveGE 容器；直接改成员值容易跳过 aggregator、AttributeSet 回调和 delegate；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:443`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:386`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3765`。
+
+## 把 Damage 当成永久属性保存导致逻辑混乱
+
+- 源码测试 AttributeSet 把 `Damage` 注释为非持久属性，只用于应用负向 Health mod；这不是引擎固定规则，但说明 Damage 常作为 transient/meta 流程而不是长期状态；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemTestAttributeSet.h:36`。
+- “Damage Meta Attribute” 是开发实践推断，本轮源码未确认固定 Meta Attribute 类型。
+
+## 在 PreAttributeChange 中只 Clamp CurrentValue，却没有处理 BaseValue
+
+- `PreAttributeChange` 适合 clamp current/final value；但源码另有 `PreAttributeBaseChange`，注释明确如果希望 base value 也被 clamp，应在这里处理；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:211`、`:225`。
+
+## MaxHealth 改变后 Health 没同步 Clamp
+
+- GAS 源码只提供 `PreAttributeChange` / `PreAttributeBaseChange` 回调机制，没有自动规定 MaxHealth 变化时如何同步 Health；需要项目侧在合适回调或外部系统中处理，这是开发实践推断；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:211`、`:225`。
+
+## Instant GE 和 Duration GE 对 AttributeSet 回调的触发理解错误
+
+- Instant/periodic execute 路径会进入 `InternalExecuteMod`，触发 `PreGameplayEffectExecute` / `PostGameplayEffectExecute` 并修改 base value；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3907`、`:3930`、`:3946`。
+- Duration/Infinite 的普通持续 modifier 通常注册到 `FAggregator`，更新 current value；源码注释明确类似 5 秒 +10 移速 buff 的应用不会触发 `PreGameplayEffectExecute`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4347`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:193`。
+
+## PostGameplayEffectExecute 中写了只应该服务端执行的逻辑但没有判断 Authority
+
+- `PostGameplayEffectExecute` 会在 GE execute 路径调用；普通 GE 应用受 ASC 权限/预测逻辑影响，但完整预测/客户端回滚路径本轮未展开，未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:798`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3946`。
+- 开发实践推断：死亡、发奖励、生成 Actor 等权威逻辑需要显式考虑 Authority，不要只因为在 AttributeSet 回调中就假设一定只跑服务端。
+
+## UI 直接 Tick 读取属性而不是监听 AttributeChangeDelegate
+
+- ASC 提供 `GetGameplayAttributeValueChangeDelegate`，ActiveGE 容器在属性 current value 更新后广播 `FOnGameplayAttributeValueChange`；开发实践推断，UI 应绑定 delegate 而不是 Tick 轮询；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:534`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3790`。
+
+## AttributeSet 中写了过多业务逻辑，导致和 Character / Ability / Effect 耦合过重
+
+- 源码注释明确 `PreAttributeChange` 用于 clamp，不用于触发“damage applied”这类 gameplay events；测试类关于死亡处理也说明可以在 AttributeSet 或 Actor 层，取舍依项目；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:211`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestAttributeSet.cpp:112`。
+- 开发实践推断：AttributeSet 更适合做属性约束、meta attribute 转换和轻量通知；复杂战斗流程应放到 Ability、GE/Execution、ASC/Character 或项目事件系统。

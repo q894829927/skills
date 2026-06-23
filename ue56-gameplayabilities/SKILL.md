@@ -35,6 +35,7 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 - `ability-tasks.md`：第六轮 AbilityTask / GameplayTask 专题，覆盖 `UAbilityTask`、`UGameplayTask`、`UGameplayTasksComponent`、Ability `ActiveTasks`、常见 Task 分类、输入/事件/蒙太奇/TargetData/GE/Tag/Attribute 监听流程和预测接入点。
 - `gameplay-cues.md`：第七轮 GameplayCue 专题，覆盖 `UGameplayCueManager`、`UGameplayCueSet`、`GameplayCueNotify` 类型、`FGameplayCueParameters`、ASC/GE 触发路径、Notify 生命周期、复制与加载机制。
 - `networking-prediction.md`：第八轮 GAS 网络预测 / RPC / Replication / Serialization 专题，覆盖 `FPredictionKey`、`FScopedPredictionWindow`、Ability 激活 RPC、GenericReplicatedEvent、TargetData、GE/Attribute/Cue 复制、ASC ReplicationMode、ReplicationProxy、Iris/NetSerializer。
+- `globals-blueprint-library.md`：第九轮 GAS 全局入口与蓝图辅助 API 专题，覆盖 `UAbilitySystemGlobals`、`UAbilitySystemBlueprintLibrary`、`IAbilitySystemInterface`、ASC 查找、EffectContext、TargetData、SetByCaller、Dynamic Tags、GameplayCueParameters 与全局配置。
 - `pitfalls.md`：常见坑清单，按轮次补充 ASC、Ability、GameplayEffect、AttributeSet、AbilityTask、GameplayCue、网络预测/复制相关问题。
 
 ## 优先分析顺序
@@ -43,8 +44,8 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 
 下一轮推荐入口：
 
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemGlobals.h`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemBlueprintLibrary.h`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemBlueprintLibrary.cpp`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemInterface.h`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesBlueprintEditor`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor.h`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbilityTargetActor.cpp`

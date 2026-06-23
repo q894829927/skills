@@ -366,3 +366,33 @@ ASC `BlockedAbilityTags` 的关系：Ability 的 `BlockAbilitiesWithTag` 通过 
 - `FGameplayAbilityReplicatedData` 同名类型未确认，源码实际确认的是 `FAbilityReplicatedData`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h:681`。
 - `GameplayCue_Types.cpp` 在当前源码路径未确认存在；GameplayCue 参数和容器序列化主要确认在 `GameplayEffectTypes.cpp` 与 `GameplayCueInterface.cpp`。
 - TargetActor 子类的 TargetData 校验失败策略、predicted GameplayCue / GE 的完整表现回滚、Montage prediction reject 的具体 warning 路径、本轮未完整展开，未确认。
+
+# 核心类：GAS 全局入口与蓝图 API（第九轮）
+
+完整专题见 `globals-blueprint-library.md`。本节只保留核心索引，便于从 ASC、Ability、GE、TargetData、GameplayCue 快速跳到全局/蓝图入口。
+
+## 类定位索引
+
+- `UAbilitySystemGlobals` 是 GameplayAbilities 模块的全局配置、初始化与工厂入口，通过 `UAbilitySystemGlobals::Get()` 返回模块级单例；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemGlobals.h:45`、`:52`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilitiesModule.cpp:24`。
+- `UAbilitySystemBlueprintLibrary` 是蓝图工具库，暴露 ASC 获取、GameplayEvent、Attribute 查询、TargetData、EffectContext、GameplayCueParameters、GameplayEffectSpec handle、SetByCaller 和 dynamic tag 操作；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemBlueprintLibrary.h:68`、`:75`、`:83`、`:178`、`:222`、`:311`、`:411`、`:423`。
+- `IAbilitySystemInterface` 要求 C++ 类实现 `GetAbilitySystemComponent() const`，且源码注释确认返回的 ASC 可以位于另一个 Actor，例如 Pawn 使用 PlayerState 的 ASC；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemInterface.h:15`、`:25`、`:26`。
+- Globals 查找 ASC 时优先使用 `IAbilitySystemInterface`，fallback 才是 `FindComponentByClass<UAbilitySystemComponent>()`；BlueprintLibrary 的 ASC 获取只是转发到 Globals；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:233`、`:240`、`:243`、`:247`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemBlueprintLibrary.cpp:77`。
+- Globals 初始化全局 curve/attribute/cue/tag 配置，并初始化 TargetData / EffectContext 的 NetSerialize struct cache；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:64`、`:76`、`:82`、`:84`、`:87`、`:370`。
+
+## GAS 全局入口与蓝图 API 速查
+
+- 获取 ASC：蓝图侧用 `UAbilitySystemBlueprintLibrary::GetAbilitySystemComponent`，项目侧优先实现 `IAbilitySystemInterface::GetAbilitySystemComponent`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemBlueprintLibrary.cpp:77`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemInterface.h:26`。
+- Character / PlayerState 谁实现接口：源码未规定固定架构；开发实践推断是外界常传入谁查 ASC，谁就应该能返回正确 ASC，PlayerState 持有 ASC 时 Pawn/Character 可转发 PlayerState ASC；源码依据：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemInterface.h:25`。
+- 创建 GE Spec：蓝图库提供 `MakeSpecHandleByClass` 和 `CloneSpecHandle`，旧 `MakeSpecHandle(UGameplayEffect*)` 已 deprecated；ASC 另有 `MakeOutgoingSpec`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemBlueprintLibrary.h:249`、`:255`、`:259`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:363`。
+- 应用 GE：`ApplyGameplayEffectToSelf/Target` 与 `ApplyGameplayEffectSpecToSelf/Target` 在 ASC 上，不是蓝图库同名函数；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:327`、`:333`、`:790`、`:795`。
+- 设置 SetByCaller：用 `AssignSetByCallerMagnitude` 或 `AssignTagSetByCallerMagnitude` 在应用 GE 前写入 Spec；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemBlueprintLibrary.h:423`、`:427`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemBlueprintLibrary.cpp:985`、`:1004`。
+- 操作 EffectContext：蓝图库确认能读写 HitResult、Origin，并读取 Instigator / OriginalInstigator / EffectCauser / SourceObject；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemBlueprintLibrary.h:319`、`:327`、`:331`、`:335`、`:339`、`:343`、`:347`、`:351`。
+- 操作 TargetData：先用 `GetDataCountFromTargetData` 和 `TargetDataHasActor/HitResult/Origin/EndPoint` 检查，再读取 actor、hit result、origin、endpoint；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemBlueprintLibrary.h:230`、`:275`、`:279`、`:287`、`:295`。
+- 触发 GameplayCue：`GameplayCueFunctionLibrary` 提供 Actor 级 Execute/Add/Remove 辅助，内部优先找 ASC，authority 时走 ASC cue 路径；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueFunctionLibrary.h:33`、`:39`、`:45`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueFunctionLibrary.cpp:25`、`:49`、`:78`。
+- 排查空 ASC：确认 Actor 非空、接口已实现、接口返回不为空、Actor 身上有 ASC fallback，或者 PlayerState/Character 转发关系正确；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:235`、`:240`、`:247`、`:254`。
+
+## 第九轮未确认项
+
+- 用户列出的 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayAbilityTargetTypes.h` 未确认存在；实际确认路径为 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h:193`。
+- `UAbilitySystemBlueprintLibrary` 当前未确认存在直接 `ClearTargetData`、`EffectContextAddSourceObject`、`EffectContextAddInstigator` 或读取 SetByCaller magnitude 的蓝图函数；底层 C++ handle/spec 具备部分能力；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h:215`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:544`、`:642`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:1082`。
+- 是否必须自定义 `UAbilitySystemGlobals` 类未确认；源码只确认可通过 developer settings 配置 Globals class，并提供 virtual factory/hook；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayAbilitiesDeveloperSettings.h:37`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemGlobals.h:57`、`:78`、`:81`、`:84`。

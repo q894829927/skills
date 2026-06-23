@@ -330,3 +330,39 @@ ASC `BlockedAbilityTags` 的关系：Ability 的 `BlockAbilitiesWithTag` 通过 
 - `GameplayCue_Types.cpp` 在当前源码树不存在，未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCue_Types.cpp`。
 - GameplayCue 编辑器工具、完整网络预测回滚、Niagara/Audio 底层、本轮未展开，未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueNotifyTypes.cpp`。
 - `GameplayCueComponent` 或等价 GameplayEffectComponent 在当前 `GameplayEffectComponents` 目录未确认；确认路径仍是 `UGameplayEffect::GameplayCues`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2299`。
+
+# 核心类：GAS 网络预测 / 复制体系（第八轮）
+
+完整专题见 `networking-prediction.md`。本节保留核心索引，便于从 Ability、AbilityTask、GameplayEffect、AttributeSet、GameplayCue 文档跳转到网络层。
+
+## 类定位索引
+
+- `FPredictionKey` 是 GAS 预测动作的标识，保存 `Current`、`Base`、server initiated 标记，并提供 reject / caught-up delegate；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:296`、`:304`、`:308`、`:324`。
+- `FScopedPredictionWindow` 以 RAII 方式临时设置 ASC 的 `ScopedPredictionKey`，服务端窗口析构时可把确认 key 写入 `ReplicatedPredictionKeyMap`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:479`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayPrediction.cpp:493`、`:509`。
+- `FGameplayAbilityActivationInfo` 保存 Ability 激活模式和激活时 prediction key，模式包括 Authority、NonAuthority、Predicting、Confirmed、Rejected；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayAbilitySpec.h:25`、`:113`、`:156`。
+- `FReplicatedPredictionKeyMap` 是 ASC owner-only 复制的 fast array，用于服务端确认 prediction key 后触发客户端 catch-up；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:595`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:1978`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayPrediction.cpp:575`。
+- `FGameplayAbilitySpecHandle` 是指向已授予 Ability spec 的 handle，作为 Ability 激活 RPC、TargetData 和 replicated event 的基础标识；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayAbilitySpecHandle.h:15`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:1753`。
+- `FGameplayAbilityReplicatedDataContainer` 按 AbilitySpecHandle + PredictionKey 缓存 TargetData 和 GenericReplicatedEvent 数据；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTypes.h:602`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTypes.cpp:413`。
+- `FAbilityReplicatedData` 是源码实际确认的 GenericReplicatedEvent 缓存类型；`FGameplayAbilityReplicatedData` 同名类型本轮未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h:681`。
+- `FServerAbilityRPCBatch` / `FScopedServerAbilityRPCBatcher` 只批处理 ASC 明确支持的 TryActivate、TargetData、EndAbility 三类 server RPC；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTypes.h:448`、`:486`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:1328`。
+- `EGameplayEffectReplicationMode` 控制 ActiveGE 复制粒度：Minimal、Mixed、Full；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:81`。
+- `IAbilitySystemReplicationProxyInterface` 让 Actor 作为 ASC 复制代理，主要转发 GameplayCue RPC；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemReplicationProxyInterface.h:21`、`:39`。
+- GameplayAbilities 模块通过 `SetupIrisSupport(Target)` 接入 Iris，并提供 `PredictionKey`、TargetData、EffectContext、RepAnimMontage、MinimalCue、MinimalTag 等 NetSerializer；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/GameplayAbilities.Build.cs:42`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Serialization/PredictionKeyNetSerializer.cpp:194`。
+
+## GAS 网络预测速查
+
+- LocalPredicted Ability 必查：`NetExecutionPolicy`、ActorInfo/Avatar、locally controlled、`FScopedPredictionWindow`、`ClientActivateAbilitySucceed` / `ClientActivateAbilityFailed`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1904`、`:1922`、`:2251`、`:2339`。
+- ServerOnly Ability 必查：客户端不要直接执行权威逻辑，激活应走服务端 `InternalTryActivateAbility`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1761`、`:2026`。
+- TargetData 必查：`FGameplayAbilityTargetDataHandle::NetSerialize`、PredictionKey、`CallServerSetReplicatedTargetData`、服务端 delegate 绑定和 `ConsumeClientReplicatedTargetData`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTargetTypes.cpp:183`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3945`、`:3838`。
+- WaitInputPress / WaitInputRelease 必查：输入 replicated event 是否发送、Task 是否绑定 `AbilityReplicatedEventDelegate`、是否调用 `ConsumeGenericReplicatedEvent`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitInputPress.cpp:26`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitInputRelease.cpp:26`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3849`。
+- GameplayEffect 预测必查：periodic GE 不预测，predicted instant GE 临时作为 infinite ActiveGE，回滚依赖 prediction key delegate；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:821`、`:862`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4264`。
+- Attribute 复制必查：AttributeSet subobject 复制、属性 RepNotify、`GAMEPLAYATTRIBUTE_REPNOTIFY`、预测属性 `REPNOTIFY_Always`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1710`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:404`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:127`。
+- GameplayCue 复制必查：手动 Cue RPC、`ActiveGameplayCues`、`MinimalReplicationGameplayCues`、local prediction key 去重；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1436`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:1884`、`:1887`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1438`。
+- ReplicationMode 选择建议是开发实践推断：玩家自身 ASC 常用 Mixed，AI 或非关键单位常用 Minimal，需要所有客户端完整 GE 状态时用 Full；源码依据：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:81`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4875`。
+- PredictionKey 无效排查：确认当前动作仍在 prediction window 内，跨帧 AbilityTask 是否开启新窗口，RPC 是否带正确 key；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:198`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4234`。
+
+## 第八轮未确认项
+
+- `FGameplayAbilityReplicatedData` 同名类型未确认，源码实际确认的是 `FAbilityReplicatedData`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h:681`。
+- `GameplayCue_Types.cpp` 在当前源码路径未确认存在；GameplayCue 参数和容器序列化主要确认在 `GameplayEffectTypes.cpp` 与 `GameplayCueInterface.cpp`。
+- TargetActor 子类的 TargetData 校验失败策略、predicted GameplayCue / GE 的完整表现回滚、Montage prediction reject 的具体 warning 路径、本轮未完整展开，未确认。

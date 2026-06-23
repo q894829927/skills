@@ -346,3 +346,83 @@
 
 - CueSet 会为没有精确 notify 的子 tag 指向父 tag notify；notify 的 `IsOverride=false` 时还会继续调用父级 data；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueSet.cpp:386`、`:397`、`:312`、`:343`。
 - 因此 `GameplayCue.Damage.Fire` 可能触发父级 `GameplayCue.Damage` notify；这不是精确匹配 bug，而是 CueSet 加速 map 与 override 语义；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueSet.cpp:401`。
+
+# 常见坑：GAS 网络预测 / RPC / Replication / Serialization（第八轮）
+
+## LocalPredicted Ability 没有正确处理预测失败
+
+- 服务端拒绝客户端预测激活时会调用 `ClientActivateAbilityFailed`，客户端会广播 reject delegate、设置 activation rejected，并对实例 Ability 调用 `K2_EndAbility`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:2251`、`:2253`、`:2288`、`:2296`。
+- 业务中如果把表现或状态改动放在 AbilityTask / Cue / GE 外部路径，需要自己处理失败后的清理；这是开发实践推断。源码只确认 GAS 通过 PredictionKey delegate 和失败 RPC 提供回调点；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:88`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayPrediction.cpp:595`。
+
+## 跨帧 AbilityTask 继续使用旧 PredictionKey
+
+- 源码注释明确 latent / timer / AbilityTask 跨帧后需要新的 `FScopedPredictionWindow`，并以 WaitInputRelease 为例；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:198`。
+- 旧 key 可能在 scope 结束后不再适合新的预测动作，导致 TargetData、GenericEvent 或 GE 预测被拒绝；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4234`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2931`。
+
+## TargetData 客户端生成了但服务端没有收到
+
+- 客户端应通过 `CallServerSetReplicatedTargetData` 发送 TargetData；服务端 `ServerSetReplicatedTargetData` 会缓存数据并广播 `TargetSetDelegate`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:288`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3945`、`:3968`。
+- 自定义 TargetData struct 缺少 native `NetSerialize` 会导致序列化失败；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTargetTypes.cpp:230`、`:240`。
+
+## TargetData 校验失败后没有正确 Cancel
+
+- `ServerSetReplicatedTargetData_Validate` 会拒绝 invalid TargetData item；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3971`。
+- 取消路径应走 `ServerSetReplicatedTargetDataCancelled`，该路径会设置 cancelled 状态并广播 `TargetCancelledDelegate`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3985`、`:3990`、`:3995`。
+- 具体 TargetActor 校验失败后如何转成 Cancel，本轮未完整展开，未确认。
+
+## GenericReplicatedEvent 没有被 Consume 导致重复触发
+
+- `InvokeReplicatedEvent` 会把 `bTriggered` 设为 true，delegate 未绑定时会缓存；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3886`、`:3890`。
+- `ConsumeGenericReplicatedEvent` 负责把 `bTriggered` 清回 false；WaitInputPress/Release 收到事件后会调用它；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3849`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitInputPress.cpp:37`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitInputRelease.cpp:37`。
+
+## ServerOnly Ability 在客户端直接执行表现逻辑
+
+- `InternalTryActivateAbility` 会阻止客户端按 ServerOnly / ServerInitiated 策略直接激活不该本地执行的 Ability；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1761`。
+- 开发实践推断：客户端表现应由 GameplayCue、Montage replication、或服务端确认后的客户端路径驱动，不应把权威 ServerOnly Ability 当 LocalPredicted Ability 使用；源码依据：`ClientActivateAbilitySucceed` / `ClientActivateAbilityFailed` 区分确认与拒绝；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:2339`、`:2251`。
+
+## Mixed / Minimal ReplicationMode 理解错误
+
+- `EGameplayEffectReplicationMode` 明确定义 Minimal、Mixed、Full 三种 ActiveGE 复制模式；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:81`。
+- `FActiveGameplayEffectsContainer::GetReplicationCondition` 中 Minimal 不复制 ActiveGE，Mixed 在 authority 上 owner-only，Full 给所有连接；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4875`、`:4882`、`:4887`、`:4899`。
+
+## 以为 ActiveGameplayEffect 在所有客户端都会完整复制
+
+- ASC 的 `ActiveGameplayEffects` 使用动态复制条件，具体条件由 ReplicationMode 决定；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1633`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4875`。
+- Minimal/Mixed 场景下其他客户端更多依赖 `MinimalReplicationTags` 和 `MinimalReplicationGameplayCues`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:1909`、`:1887`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1655`。
+
+## AttributeSet 复制了但 Attribute RepNotify 没正确写
+
+- ASC 可复制 AttributeSet subobject，但具体 Attribute 属性仍需要 UE 通用复制声明和 RepNotify；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1710`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:404`。
+- `GAMEPLAYATTRIBUTE_REPNOTIFY` 会调用 `SetBaseAttributeValueFromReplication`，否则 aggregator / attribute change delegate 可能收不到正确更新；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:404`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3561`。
+
+## 预测属性没有使用 REPNOTIFY_Always
+
+- 预测文档明确建议 predicted attributes 使用 `REPNOTIFY_Always`，否则客户端预测值与服务端复制值相同或回滚时可能不触发 RepNotify；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:127`、`:138`。
+- `GAMEPLAYATTRIBUTE_REPNOTIFY` 与 `SetBaseAttributeValueFromReplication` 是让预测属性复制后触发 delegate 的 GAS 接入点；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AttributeSet.h:404`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3606`。
+
+## GameplayCue 在预测和服务端确认时重复播放
+
+- ASC 的 NetMulticast cue implementation 会在本地 prediction key 已经预测过时跳过，避免重复执行；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1438`。
+- ActiveGE 复制到客户端时也会检查是否已有本地 predicted effect，以避免重复触发 cue；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2745`、`:2751`。
+- 自定义 Cue / Task 里手动播放表现时仍可能重复，这是开发实践推断；完整预测失败后的 cue 回滚本轮未展开，未确认。
+
+## predicted GE 回滚后表现没有清理
+
+- predicted instant GE 会临时作为 infinite ActiveGE，并通过 prediction key 的 reject/caught-up delegate 触发客户端移除；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:862`、`:910`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4264`。
+- 如果表现没有绑定到 GE / Cue / AbilityTask 的结束路径，reject 后可能残留；这是开发实践推断，源码确认 GAS 提供了 predicted ActiveGE 移除入口；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4546`、`:4553`。
+
+## ASC 放在 PlayerState / Character 时 Owner / Avatar / NetOwner 配置错误
+
+- ASC 区分 `OwnerActor` 与 `AvatarActor`，并在 `InitAbilityActorInfo` 中初始化；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:1546`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:141`。
+- ASC 可通过 `IAbilitySystemReplicationProxyInterface` 使用 AvatarActor 等对象作为 replication proxy；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1786`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemReplicationProxyInterface.h:21`。
+- PlayerState / Character 的具体项目取舍不是源码直接规定，未确认。开发实践推断：无论放哪里，都要保证 Owner / Avatar / NetOwner 与 locally controlled 判断一致。
+
+## 自定义 AbilityTask 中发送 RPC 没带正确 PredictionKey
+
+- TargetData 与 GenericReplicatedEvent 都按 AbilitySpecHandle + PredictionKey 建 cache；key 不匹配会导致服务端 Task 收不到或收到错误数据；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTypes.h:500`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:1699`。
+- 需要跨帧发送 RPC 的 Task 应考虑新的 `FScopedPredictionWindow`，这是源码注释明确的预测窗口使用场景；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h:198`。
+
+## RPC batch 打开后调试时误判调用顺序
+
+- RPC batch 只批处理 `CallServerTryActivateAbility`、`CallServerSetReplicatedTargetData`、`CallServerEndAbility`，在 `ServerAbilityRPCBatch_Internal` 中统一展开执行；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:1328`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4132`。
+- `CallServerTryActivateAbility` / `CallServerSetReplicatedTargetData` / `CallServerEndAbility` 在有 batch 时只写入 batch 数据，不一定立即发出独立 RPC；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4192`、`:4217`、`:4250`。

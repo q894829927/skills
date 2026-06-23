@@ -34,15 +34,17 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 - `attributes.md`：第五轮 AttributeSet 专题，覆盖 `UAttributeSet`、`FGameplayAttributeData`、`FGameplayAttribute`、ASC 管理 AttributeSet、属性定义/复制、属性回调、GE 修改 Attribute、Base/Current、Damage/Healing 和 UI delegate 绑定。
 - `ability-tasks.md`：第六轮 AbilityTask / GameplayTask 专题，覆盖 `UAbilityTask`、`UGameplayTask`、`UGameplayTasksComponent`、Ability `ActiveTasks`、常见 Task 分类、输入/事件/蒙太奇/TargetData/GE/Tag/Attribute 监听流程和预测接入点。
 - `gameplay-cues.md`：第七轮 GameplayCue 专题，覆盖 `UGameplayCueManager`、`UGameplayCueSet`、`GameplayCueNotify` 类型、`FGameplayCueParameters`、ASC/GE 触发路径、Notify 生命周期、复制与加载机制。
-- `pitfalls.md`：常见坑清单，按轮次补充 ASC、Ability、GameplayEffect、AttributeSet、AbilityTask、GameplayCue 相关问题。
+- `networking-prediction.md`：第八轮 GAS 网络预测 / RPC / Replication / Serialization 专题，覆盖 `FPredictionKey`、`FScopedPredictionWindow`、Ability 激活 RPC、GenericReplicatedEvent、TargetData、GE/Attribute/Cue 复制、ASC ReplicationMode、ReplicationProxy、Iris/NetSerializer。
+- `pitfalls.md`：常见坑清单，按轮次补充 ASC、Ability、GameplayEffect、AttributeSet、AbilityTask、GameplayCue、网络预测/复制相关问题。
 
 ## 优先分析顺序
 
-优先从 `UAbilitySystemComponent` 串联运行时核心路径，再按问题需要进入 `UGameplayAbility`、`UGameplayEffect`、`FGameplayAbilitySpec`、`FActiveGameplayEffect`、`UAttributeSet`、`UAbilityTask`、`UGameplayCueManager` 与序列化/预测相关类型。
+优先从 `UAbilitySystemComponent` 串联运行时核心路径，再按问题需要进入 `UGameplayAbility`、`UGameplayEffect`、`FGameplayAbilitySpec`、`FActiveGameplayEffect`、`UAttributeSet`、`UAbilityTask`、`UGameplayCueManager`、网络预测/复制与序列化相关类型。
 
 下一轮推荐入口：
 
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayPrediction.h`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayPrediction.cpp`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemReplicationProxyInterface.h`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Serialization`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemGlobals.h`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemBlueprintLibrary.h`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemBlueprintLibrary.cpp`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemInterface.h`

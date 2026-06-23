@@ -569,3 +569,122 @@ flowchart TD
 
 - 完整预测失败后的 GameplayCue 回滚、去重、重放规则未展开，未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1797`。
 - GameplayCue 编辑器工具和 Niagara/Audio 底层未展开，未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueNotifyTypes.cpp`。
+
+# GAS 网络预测 / RPC / Replication 调用链（第八轮）
+
+完整专题见 `networking-prediction.md`。本节只保留最常用的网络链路入口。
+
+## LocalPredicted Ability 激活链
+
+```mermaid
+flowchart TD
+    A["客户端输入 / TryActivateAbility"] --> B["ASC::TryActivateAbility"]
+    B --> C["ASC::InternalTryActivateAbility"]
+    C --> D["FScopedPredictionWindow(this, true)"]
+    D --> E["ActivationInfo.SetPredicting"]
+    E --> F["CallServerTryActivateAbility"]
+    E --> G["本地 CallActivateAbility"]
+    F --> H["ServerTryActivateAbility"]
+    H --> I["InternalServerTryActivateAbility"]
+    I --> J["FScopedPredictionWindow(this, PredictionKey)"]
+    J --> K["服务端 InternalTryActivateAbility"]
+    K --> L{"成功?"}
+    L -->|"是"| M["ClientActivateAbilitySucceed"]
+    L -->|"否"| N["ClientActivateAbilityFailed"]
+    M --> O["客户端 SetActivationConfirmed"]
+    N --> P["Reject delegate / K2_EndAbility"]
+```
+
+- 客户端 LocalPredicted 分支创建 prediction window、设置 `ActivationInfo.SetPredicting`、RPC 到服务端并本地激活；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1904`、`:1922`、`:1924`、`:1926`。
+- 服务端 `InternalServerTryActivateAbility` 使用客户端 key 创建服务端 prediction window，失败时调用 `ClientActivateAbilityFailed`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:2026`、`:2070`、`:2088`。
+- 客户端确认成功走 `ClientActivateAbilitySucceedWithEventData` 并设置 confirmed，失败走 rejected delegate 和 `K2_EndAbility`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:2339`、`:2380`、`:2251`、`:2296`。
+
+简化伪代码：
+
+```cpp
+if (Ability->NetExecutionPolicy == LocalPredicted)
+{
+    FScopedPredictionWindow Window(ASC, true);
+    ActivationInfo.SetPredicting(ASC->ScopedPredictionKey);
+    ASC->CallServerTryActivateAbility(Handle, ASC->ScopedPredictionKey);
+    Ability->CallActivateAbility(Handle, ActorInfo, ActivationInfo, EventData);
+}
+```
+
+## Generic Replicated Event 链
+
+```mermaid
+flowchart TD
+    A["AbilityTask 绑定 CallOrAddReplicatedDelegate"] --> B["输入/确认/同步事件发生"]
+    B --> C["ServerSetReplicatedEvent 或 ClientSetReplicatedEvent"]
+    C --> D["InvokeReplicatedEvent"]
+    D --> E["AbilityTargetDataMap.FindOrAdd"]
+    E --> F["写入 bTriggered / Payload / PredictionKey"]
+    F --> G{"Delegate 已绑定?"}
+    G -->|"是"| H["Broadcast"]
+    G -->|"否"| I["缓存等待后续绑定"]
+    H --> J["Task 回调"]
+    J --> K["ConsumeGenericReplicatedEvent"]
+```
+
+- `InvokeReplicatedEvent` 按 AbilitySpecHandle + PredictionKey 写缓存，已绑定 delegate 则立即广播；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3886`。
+- `CallOrAddReplicatedDelegate` 处理“事件先到”与“delegate 先绑定”两种顺序；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4066`。
+- `ConsumeGenericReplicatedEvent` 清除 triggered 状态，避免重复触发；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3849`。
+
+## TargetData 复制链
+
+```mermaid
+flowchart TD
+    A["客户端 TargetActor 生成 TargetData"] --> B["CallServerSetReplicatedTargetData"]
+    B --> C["ServerSetReplicatedTargetData"]
+    C --> D["AbilityTargetDataMap.FindOrAdd"]
+    D --> E["保存 TargetData / Tag / PredictionKey"]
+    E --> F["TargetSetDelegate.Broadcast"]
+    F --> G["服务端 WaitTargetData 回调"]
+    G --> H["ConsumeClientReplicatedTargetData"]
+    H --> I["ValidData 或 Cancelled"]
+```
+
+- `FGameplayAbilityTargetDataHandle` 通过 native `NetSerialize` 序列化多态 TargetData，缺少 native NetSerialize 的 struct 会报错；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTargetTypes.cpp:183`、`:240`。
+- `ServerSetReplicatedTargetData` 缓存 TargetData 并广播服务端 Task delegate；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3945`、`:3968`。
+- `WaitTargetData` 客户端确认时调用 `CallServerSetReplicatedTargetData`，服务端回调中消费数据；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:211`、`:228`、`:288`。
+
+## GameplayEffect 预测复制链
+
+```mermaid
+flowchart TD
+    A["ApplyGameplayEffectSpecToSelf"] --> B{"Authority 或有效 PredictionKey"}
+    B -->|"否"| C["拒绝"]
+    B -->|"是"| D{"Periodic 且预测"}
+    D -->|"是"| E["客户端拒绝预测 periodic GE"]
+    D -->|"否"| F{"Instant 预测?"}
+    F -->|"是"| G["临时作为 Infinite ActiveGE"]
+    F -->|"否"| H["Instant 直接 Execute 或 Duration/Infinite 加入 ActiveGE"]
+    G --> I["注册 RejectOrCaughtUpDelegate"]
+    H --> J["按 ReplicationMode 复制 ActiveGE / MinimalTags / MinimalCues"]
+```
+
+- `ApplyGameplayEffectSpecToSelf` 要求 authority 或有效 prediction key；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:812`。
+- periodic GE 不预测，predicted instant GE 会临时作为 infinite ActiveGE；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:821`、`:862`、`:910`。
+- ActiveGE 复制条件由 `EGameplayEffectReplicationMode` 决定；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4875`。
+
+## PredictionKey 确认链
+
+```mermaid
+flowchart TD
+    A["客户端生成 PredictionKey"] --> B["RPC 到服务端"]
+    B --> C["服务端 FScopedPredictionWindow"]
+    C --> D["析构 ReplicatePredictionKey"]
+    D --> E["ReplicatedPredictionKeyMap owner-only 复制"]
+    E --> F["FReplicatedPredictionKeyItem::OnRep"]
+    F --> G["FPredictionKeyDelegates::CatchUpTo"]
+```
+
+- `ReplicatedPredictionKeyMap` 必须在 ASC replicated properties 最后，以保证 catch-up 时序；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:1976`。
+- `FReplicatedPredictionKeyItem::OnRep` 调用 `CatchUpTo`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayPrediction.cpp:575`、`:595`。
+
+## 第八轮未确认
+
+- TargetActor 子类校验失败后的完整策略未展开，未确认。
+- predicted GE / GameplayCue 的表现层完整回滚策略未展开，未确认。
+- Montage prediction reject 的具体日志路径未完整定位，未确认。

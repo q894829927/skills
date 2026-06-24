@@ -791,3 +791,108 @@ flowchart TD
 
 - `Public/GameplayAbilityTargetTypes.h` 未确认存在；本轮确认实际路径是 `Public/Abilities/GameplayAbilityTargetTypes.h`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h:193`。
 - `UAbilitySystemBlueprintLibrary` 未确认有直接 `ClearTargetData`、`EffectContextAddSourceObject`、`EffectContextAddInstigator`、读取 SetByCaller magnitude 的蓝图函数；底层 C++ 类型存在部分能力；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h:215`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:544`、`:642`。
+
+# GameplayAbilitiesEditor / Blueprint / K2 调用链（第十轮）
+
+完整专题见 `editor-blueprint.md`。本节只记录编辑器侧注册、资产创建、K2 编译展开和 details customization 的关键链路。
+
+## 编辑器模块启动注册链
+
+```mermaid
+flowchart TD
+    A["FGameplayAbilitiesEditorModule::StartupModule"] --> B["RegisterCustomPropertyTypeLayout"]
+    A --> C["RegisterCustomClassLayout"]
+    A --> D["RegisterAssetTypeActions"]
+    A --> E["RegisterVisualPinFactory"]
+    A --> F["RegisterGameplayCueEditorTab"]
+    A --> G["RegisterTrackEditor / ChannelInterface"]
+    A --> H["RegisterAbilitySystemGlobals debug callbacks"]
+```
+
+- `GameplayAbilitiesEditor` 模块由 `IMPLEMENT_MODULE(FGameplayAbilitiesEditorModule, GameplayAbilitiesEditor)` 注册；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayAbilitiesEditorModule.cpp:169`。
+- `StartupModule` 注册 GameplayTag/Attribute/GE magnitude/Execution 等 property customization；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayAbilitiesEditorModule.cpp:171`、`:175`、`:183`。
+- `StartupModule` 注册 `GameplayEffect` class details customization 与 `FAssetTypeActions_GameplayAbilitiesBlueprint`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayAbilitiesEditorModule.cpp:185`、`:186`、`:190`。
+- `StartupModule` 注册 Attribute pin factory、GameplayCue editor tab、AbilitySystemGlobals 的资产打开/查找回调、Sequencer cue track；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayAbilitiesEditorModule.cpp:206`、`:213`、`:232`、`:239`。
+- `ShutdownModule` 对应注销 settings、tag listener、pin factory、cue tab、debug callbacks、Sequencer track/channel；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayAbilitiesEditorModule.cpp:303`、`:307`、`:319`、`:330`、`:341`、`:350`、`:356`、`:361`。
+
+简化伪代码：
+
+```cpp
+void FGameplayAbilitiesEditorModule::StartupModule()
+{
+    PropertyModule.RegisterCustomPropertyTypeLayout(...);
+    PropertyModule.RegisterCustomClassLayout("GameplayEffect", ...);
+    AssetTools.RegisterAssetTypeActions(new FAssetTypeActions_GameplayAbilitiesBlueprint);
+    FEdGraphUtilities::RegisterVisualPinFactory(AttributePinFactory);
+    FGlobalTabmanager::RegisterNomadTabSpawner(GameplayCueAppIdentifier, ...);
+    AbilitySystemGlobals.SetShouldUseAbilitySystemAssetCallbacks(...);
+    SequencerModule.RegisterTrackEditor(...);
+}
+```
+
+## GameplayAbility 蓝图创建链
+
+```mermaid
+flowchart TD
+    A["内容浏览器创建 Gameplay Ability Blueprint"] --> B["UGameplayAbilitiesBlueprintFactory"]
+    B --> C["选择/校验 ParentClass 是 UGameplayAbility 子类"]
+    C --> D["FKismetEditorUtilities::CreateBlueprint"]
+    D --> E["创建 Gameplay Ability Graph"]
+    E --> F["添加 K2_ActivateAbility / K2_OnEndAbility 默认事件"]
+    F --> G["FGameplayAbilitiesEditor 打开蓝图"]
+```
+
+- UE5.6 中确认类名是 `UGameplayAbilitiesBlueprintFactory`，不是请求中的单数 `UGameplayAbilityBlueprintFactory`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Public/GameplayAbilitiesBlueprintFactory.h:13`。
+- 工厂默认 `ParentClass` 是 `UGameplayAbility::StaticClass()`，`SupportedClass` 是 `UGameplayAbilityBlueprint`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayAbilitiesBlueprintFactory.cpp:270`、`:271`。
+- `FactoryCreateNew` 会拒绝无效或非 `UGameplayAbility` 子类 parent，然后创建 `UGameplayAbilityBlueprint`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayAbilitiesBlueprintFactory.cpp:280`、`:291`、`:300`。
+- 工厂创建 `UGameplayAbilityGraph` / `UGameplayAbilityGraphSchema`，并添加 `K2_ActivateAbility` 与 `K2_OnEndAbility` 默认事件；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayAbilitiesBlueprintFactory.cpp:310`、`:325`、`:326`。
+- 资产动作打开时创建 `FGameplayAbilitiesEditor` 并调用 `InitGameplayAbilitiesEditor`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/AssetTypeActions_GameplayAbilitiesBlueprint.cpp:23`、`:43`、`:48`。
+
+## AbilityTask 蓝图节点编译展开链
+
+```mermaid
+flowchart TD
+    A["Ability 蓝图中放置 AbilityTask 节点"] --> B["UK2Node_LatentAbilityCall"]
+    B --> C["筛选 UAbilityTask 静态工厂函数"]
+    C --> D["为 BlueprintAssignable delegate 生成输出 exec pin"]
+    D --> E["ExpandNode 生成静态工厂调用"]
+    E --> F["绑定 delegate"]
+    F --> G["调用 UGameplayTask::ReadyForActivation"]
+    G --> H["运行时进入 UAbilityTask::Activate"]
+```
+
+- `UK2Node_LatentAbilityCall` 继承 GameplayTasksEditor 的 `UK2Node_LatentGameplayTaskCall`，专门处理 `UAbilityTask` 子类；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Public/K2Node_LatentAbilityCall.h:16`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/K2Node_LatentAbilityCall.cpp:30`。
+- 节点只允许在 `UGameplayAbility` 蓝图的 Ubergraph / Macro graph 中使用；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/K2Node_LatentAbilityCall.cpp:35`、`:56`。
+- 节点通过 `RegisterClassFactoryActions<UAbilityTask>` 发现 AbilityTask 工厂函数，并缓存 factory function / proxy class；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/K2Node_LatentAbilityCall.cpp:69`、`:77`。
+- 基类 `UK2Node_LatentGameplayTaskCall` 将 activation 函数名设为 `UGameplayTask::ReadyForActivation`，展开时生成工厂调用、delegate 绑定和 activation 调用；源码路径：`Engine/Source/Editor/GameplayTasksEditor/Private/K2Node_LatentGameplayTaskCall.cpp:53`、`:563`、`:593`、`:657`、`:899`、`:900`。
+- 自定义 AbilityTask 工厂函数若带 `BlueprintInternalUseOnly` / `HideThen` / `DefaultToSelf` 等元数据，会影响节点显示和校验；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/K2Node_LatentAbilityCall.cpp:14`、`:90`、`:99`。
+
+## GameplayCue 蓝图事件与 Notify 创建链
+
+```mermaid
+flowchart TD
+    A["GameplayCueNotify 蓝图"] --> B["实现 IGameplayCueInterface"]
+    B --> C["UK2Node_GameplayCueEvent 菜单"]
+    C --> D["选择 GameplayCue.* tag"]
+    D --> E["生成对应 Cue event node"]
+    F["GameplayCue tag details"] --> G["SGameplayCueEditor"]
+    G --> H["选择 Static / Actor Notify class"]
+    H --> I["UBlueprintFactory 创建 Notify 蓝图资产"]
+```
+
+- `UK2Node_GameplayCueEvent` 兼容实现 `UGameplayCueInterface` 的蓝图类，并从 `GameplayCue` 根 tag 下生成事件节点；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/K2Node_GameplayCueEvent.cpp:23`、`:50`、`:61`、`:80`、`:84`、`:87`、`:94`。
+- `GameplayCueTagDetails` 使用 `GameplayCueManager->GetEditorCueSet()` 查找 tag 关联 notify，并提供 Add New / Open Notify 入口；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayCueTagDetails.cpp:52`、`:94`、`:130`、`:145`、`:172`。
+- `SGameplayCueEditor` 创建新 notify 时默认提供 `UGameplayCueNotify_Static` 与 `AGameplayCueNotify_Actor` 两类，并通过 `UBlueprintFactory` 创建资产；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/SGameplayCueEditor.cpp:1389`、`:1400`、`:1404`、`:1405`、`:1432`、`:1434`。
+
+## GameplayEffect / Attribute details 编辑链
+
+- `FGameplayEffectDetails` 根据 DurationPolicy 和 Period 决定是否隐藏 DurationMagnitude、periodic inhibition、execute-on-application 等编辑项；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayEffectDetails.cpp:20`、`:32`、`:48`、`:54`。
+- `FGameplayEffectModifierMagnitudeDetails` 按 `EGameplayEffectMagnitudeCalculation` 只显示 ScalableFloat、AttributeBased、CustomCalculation 或 SetByCaller 对应编辑行；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayEffectModifierMagnitudeDetails.cpp:28`、`:47`、`:54`、`:61`、`:68`。
+- `FGameplayEffectExecutionDefinitionDetails` 会从 ExecutionCalculation CDO 同步 captured attributes 和 valid scoped modifier tags；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayEffectExecutionDefinitionDetails.cpp:37`、`:91`、`:95`、`:101`。
+- `FAttributePropertyDetails` 和 `SGameplayAttributeWidget` 扫描 `UAttributeSet` 派生类及属性，排除 `HideInDetailsView`，并提供复制引用与引用查看入口；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/AttributeDetails.cpp:34`、`:46`、`:268`、`:274`、`:296`、`:395`、`:445`。
+
+## 第十轮未确认
+
+- 当前工作树未确认存在 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesBlueprintEditor` 独立目录。
+- 请求中的 `UGameplayAbilityBlueprintFactory`、`FGameplayAbilityGraphPanelNodeFactory`、`FGameplayTagRequirementsDetails`、`FAbilityAudit`、`FAssetTypeActions_GameplayAbilityBlueprint`、`FAssetTypeActions_GameplayEffect`、`FAssetTypeActions_GameplayCueNotify` 未确认存在；源码确认了名称相近或替代类型，详见 `editor-blueprint.md`。
+- GameplayEffectComponents 在编辑器 details 中的专门定制未确认；本轮只确认 `UGameplayEffect` 运行时存在 `GEComponents` 属性；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2421`。

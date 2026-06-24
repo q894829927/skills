@@ -37,6 +37,7 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 - `gameplay-cues.md`：第七轮 GameplayCue 专题，覆盖 `UGameplayCueManager`、`UGameplayCueSet`、`GameplayCueNotify` 类型、`FGameplayCueParameters`、ASC/GE 触发路径、Notify 生命周期、复制与加载机制。
 - `networking-prediction.md`：第八轮 GAS 网络预测 / RPC / Replication / Serialization 专题，覆盖 `FPredictionKey`、`FScopedPredictionWindow`、Ability 激活 RPC、GenericReplicatedEvent、TargetData、GE/Attribute/Cue 复制、ASC ReplicationMode、ReplicationProxy、Iris/NetSerializer。
 - `globals-blueprint-library.md`：第九轮 GAS 全局入口与蓝图辅助 API 专题，覆盖 `UAbilitySystemGlobals`、`UAbilitySystemBlueprintLibrary`、`IAbilitySystemInterface`、ASC 查找、EffectContext、TargetData、SetByCaller、Dynamic Tags、GameplayCueParameters 与全局配置。
+- `editor-blueprint.md`：第十轮 GAS 编辑器与蓝图工具链专题，覆盖 `GameplayAbilitiesEditor` 模块、GameplayAbility 蓝图工厂、Ability 图表、AbilityTask latent K2 节点、GameplayCue 蓝图事件、GameplayEffect/Attribute details customization、资产动作、Ability Audit 与运行时/编辑器边界。
 - `pitfalls.md`：常见坑清单，按轮次补充 ASC、Ability、GameplayEffect、AttributeSet、AbilityTask、GameplayCue、网络预测/复制相关问题。
 
 ## 优先分析顺序
@@ -45,8 +46,7 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 
 下一轮推荐入口：
 
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesBlueprintEditor`
 - `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor.h`
 - `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbilityTargetActor.cpp`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp`

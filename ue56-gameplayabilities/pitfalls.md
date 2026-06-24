@@ -484,3 +484,65 @@
 
 - `UAbilitySystemBlueprintLibrary` 的工具函数大多是转发或句柄数据加工，例如发送 GameplayEvent、修改 SetByCaller、添加 loose tags、构造 TargetData；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemBlueprintLibrary.cpp:82`、`:985`、`:1310`、`:374`。
 - 开发实践推断：这些蓝图 API 不替项目做“是否允许应用 GE / 是否允许改 tag / 是否允许信任客户端 TargetData”的业务校验，权威逻辑仍应放在 ASC/Ability/GE/服务端路径中；源码依据是蓝图库函数没有项目级权限分支；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemBlueprintLibrary.cpp:82`、`:1310`。
+
+# 常见坑：GameplayAbilitiesEditor / Blueprint / K2 工具链（第十轮）
+
+## AbilityTask 蓝图节点创建了但没有正确激活
+
+- `UK2Node_LatentAbilityCall` 的运行时激活依赖 GameplayTasksEditor 基类展开出的 `UGameplayTask::ReadyForActivation` 调用；源码路径：`Engine/Source/Editor/GameplayTasksEditor/Private/K2Node_LatentGameplayTaskCall.cpp:53`、`:899`、`:900`。
+- 如果自定义节点或手写 C++ 创建 Task 后没有走 `ReadyForActivation`，不会进入 Task 的正常 activate 流程；这是开发实践推断，源码依据是基类 K2 展开显式生成 activation 调用；源码路径：`Engine/Source/Editor/GameplayTasksEditor/Private/K2Node_LatentGameplayTaskCall.cpp:563`、`:899`。
+
+## 自定义 AbilityTask 静态工厂函数元数据不符合 K2 节点预期
+
+- `UK2Node_LatentAbilityCall` 通过 `RegisterClassFactoryActions<UAbilityTask>` 发现 AbilityTask 工厂函数，并在校验中读取 factory function metadata；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/K2Node_LatentAbilityCall.cpp:77`、`:90`。
+- `HideThen`、`DefaultToSelf`、`BlueprintInternalUseOnly` 等元数据会影响节点 pin 和可用性；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/K2Node_LatentAbilityCall.cpp:14`、`:99`、`Engine/Source/Editor/GameplayTasksEditor/Private/K2Node_LatentGameplayTaskCall.cpp:593`。
+
+## GameplayAbility 蓝图基类选错
+
+- `UGameplayAbilitiesBlueprintFactory` 默认 parent 是 `UGameplayAbility`，并在创建时拒绝非 `UGameplayAbility` 子类；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayAbilitiesBlueprintFactory.cpp:270`、`:271`、`:291`。
+- 如果通过其他路径创建了普通 Blueprint 或错误 parent class，就不会获得 Gameplay Ability Graph、默认 `K2_ActivateAbility` / `K2_OnEndAbility` 事件等工厂初始化；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayAbilitiesBlueprintFactory.cpp:310`、`:325`、`:326`。
+
+## GameplayCueNotify 类型选错，导致持续 Cue 无法正确移除
+
+- Cue 编辑器创建 notify 时默认提供 `UGameplayCueNotify_Static` 与 `AGameplayCueNotify_Actor`；Static 是 UObject，Actor notify 可以持有实例状态和生命周期；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/SGameplayCueEditor.cpp:1404`、`:1405`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_Static.h:19`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueNotify_Actor.h:20`。
+- 开发实践推断：持续循环表现应优先选择能处理 active/remove 生命周期的 notify 形态；否则 Add/Remove 类 cue 容易残留表现；运行时事件类型依据见 `EGameplayCueEvent`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCue_Types.h:24`。
+
+## GameplayCue tag 和 Notify 资产没有正确绑定
+
+- `UK2Node_GameplayCueEvent` 从 `GameplayCue` 根 tag 下生成事件节点，但具体 tag 到 notify 的资产映射依赖 editor cue set；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/K2Node_GameplayCueEvent.cpp:84`、`:87`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayCueTagDetails.cpp:172`。
+- `GameplayCueTagDetails` 会列出当前 tag 关联 notify，并提供 Add New；如果没有正确创建或扫描到 notify，运行时 manager 可能找不到 cue；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayCueTagDetails.cpp:94`、`:130`、`:145`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:982`。
+
+## GameplayEffect Modifier Magnitude 配置错误但编辑器 UI 没能阻止
+
+- `FGameplayEffectModifierMagnitudeDetails` 只根据 magnitude 类型显示对应编辑行；它不等同于运行时数值合法性校验；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayEffectModifierMagnitudeDetails.cpp:28`、`:47`、`:54`、`:61`、`:68`。
+- SetByCaller、AttributeBased、CustomCalculation 的运行时语义仍由 GE spec、attribute capture 和 calculation 处理；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:1082`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1540`。
+
+## Attribute 选择了错误 AttributeSet 中的属性
+
+- Attribute picker 扫描 `UAttributeSet` 派生类及属性，并可被 `HideInDetailsView` 过滤；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/AttributeDetails.cpp:268`、`:274`、`:296`。
+- 编辑器能帮助选择 `FGameplayAttribute`，但不会保证目标 ASC 运行时一定拥有对应 AttributeSet；运行时 ASC 是否有 set 仍由 `HasAttributeSetForAttribute` 等接口判断；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AttributeDetails.cpp:494`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:473`。
+
+## GameplayTagRequirements 配置方向错误
+
+- 请求中的 `FGameplayTagRequirementsDetails` 未确认存在；本轮只确认运行时 `FGameplayTagRequirements` 类型与编辑器对 GameplayTag property 的 customization；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:1426`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayAbilitiesEditorModule.cpp:175`。
+- 开发实践推断：Required / Blocked、Source / Target、Application / Ongoing / Removal 方向配反时，details 面板不一定能阻止运行时逻辑失败；源码依据是 GE 运行时检查这些 tag requirement；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1295`、`:1324`。
+
+## 以为 Details 面板校验等同于运行时校验
+
+- `FGameplayEffectDetails` 主要根据 DurationPolicy/Period 隐藏或刷新 UI 行；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayEffectDetails.cpp:32`、`:48`、`:54`、`:78`。
+- Details customization 影响编辑体验，不替代 `ApplyGameplayEffectSpecToSelf`、CanApply、Immunity、TagRequirements 等运行时检查；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:778`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1295`。
+
+## 编辑器模块代码被误用到运行时模块
+
+- `GameplayAbilitiesEditor.Build.cs` 依赖 `BlueprintGraph`、`KismetCompiler`、`GraphEditor`、`PropertyEditor`、`Sequencer` 等 Editor 模块；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/GameplayAbilitiesEditor.Build.cs:25`、`:28`、`:30`、`:31`、`:40`、`:41`。
+- 开发实践推断：运行时模块引用这些 editor-only 类型会造成打包或非编辑器构建失败；源码依据是这些依赖只在 `GameplayAbilitiesEditor` 模块声明，运行时 `GameplayAbilities` 模块不应反向依赖 editor 模块；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/GameplayAbilitiesEditor.Build.cs:20`。
+
+## 在 Runtime Build 中引用 GameplayAbilitiesEditor 类型导致打包失败
+
+- `FGameplayAbilitiesEditorModule`、`UGameplayAbilitiesBlueprintFactory`、`UK2Node_LatentAbilityCall`、`UK2Node_GameplayCueEvent` 都位于 `GameplayAbilitiesEditor` 模块；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayAbilitiesEditorModule.cpp:61`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Public/GameplayAbilitiesBlueprintFactory.h:13`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Public/K2Node_LatentAbilityCall.h:16`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Public/K2Node_GameplayCueEvent.h:14`。
+- 运行时可加载的数据资产是 `UGameplayAbilityBlueprint`、`UGameplayEffect`、GameplayCueNotify 等 runtime 类型；factory、asset actions、details customization 只是编辑器创建/编辑入口；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayAbilityBlueprint.h:18`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2411`。
+
+## K2 节点或 Editor 工具分析时误改 Engine 源码
+
+- 本 Skill 的工作边界要求只读分析 UE 源码，只更新 `.codex/skills/ue56-gameplayabilities/` 下文档；源码路径记录于 `SKILL.md` 的工作边界。
+- 如果需要修复项目蓝图节点或 editor 扩展，开发实践推断应在项目/插件侧实现并引用运行时接口，避免直接修改 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor`；源码依据是 editor module 已有清晰模块边界；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/GameplayAbilitiesEditor.Build.cs:20`。

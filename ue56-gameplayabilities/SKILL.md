@@ -27,6 +27,7 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 
 ## 当前参考资料
 
+- `quick-reference.md`：GAS 速查表，按 ASC、GA、GE、AttributeSet、GameplayCue、常见玩法模板整理“什么时候用哪个类/函数/配置”。
 - `architecture.md`：第一轮源码地图，只基于 `Build.cs` 和 `Public/Private` 目录结构。
 - `core-classes.md`：核心类笔记，已覆盖 `UAbilitySystemComponent`、`UGameplayAbility`，并索引 GameplayEffect 体系。
 - `call-flows.md`：调用链笔记，已覆盖 Ability 激活链、Ability 生命周期、GameplayEffect 应用链。
@@ -40,7 +41,7 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 
 ## 优先分析顺序
 
-优先从 `UAbilitySystemComponent` 串联运行时核心路径，再按问题需要进入 `UGameplayAbility`、`UGameplayEffect`、`FGameplayAbilitySpec`、`FActiveGameplayEffect`、`UAttributeSet`、`UAbilityTask`、`UGameplayCueManager`、网络预测/复制与序列化相关类型。
+优先从 `quick-reference.md` 快速定位用户问题属于 ASC、GA、GE、AttributeSet、Cue、AbilityTask、网络预测/复制中的哪一类；需要源码依据时再回到 `architecture.md`、`core-classes.md`、`call-flows.md` 与对应专题文档复核。深入分析时，从 `UAbilitySystemComponent` 串联运行时核心路径，再按问题需要进入 `UGameplayAbility`、`UGameplayEffect`、`FGameplayAbilitySpec`、`FActiveGameplayEffect`、`UAttributeSet`、`UAbilityTask`、`UGameplayCueManager`、网络预测/复制与序列化相关类型。
 
 下一轮推荐入口：
 

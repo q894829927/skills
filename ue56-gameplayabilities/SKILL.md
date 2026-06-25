@@ -39,15 +39,16 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 - `globals-blueprint-library.md`：第九轮 GAS 全局入口与蓝图辅助 API 专题，覆盖 `UAbilitySystemGlobals`、`UAbilitySystemBlueprintLibrary`、`IAbilitySystemInterface`、ASC 查找、EffectContext、TargetData、SetByCaller、Dynamic Tags、GameplayCueParameters 与全局配置。
 - `editor-blueprint.md`：第十轮 GAS 编辑器与蓝图工具链专题，覆盖 `GameplayAbilitiesEditor` 模块、GameplayAbility 蓝图工厂、Ability 图表、AbilityTask latent K2 节点、GameplayCue 蓝图事件、GameplayEffect/Attribute details customization、资产动作、Ability Audit 与运行时/编辑器边界。
 - `targeting-targetdata.md`：第十一轮 TargetActor / TargetData / Targeting 专题，覆盖 `AGameplayAbilityTargetActor`、TargetData 类型体系、`UAbilityTask_WaitTargetData`、TargetData RPC、确认/取消模式、Trace/Radius/ActorPlacement、`VisualizeTargeting`、TargetData 到 GE/Cue 的衔接。
+- `gameplay-tags-response.md`：第十二轮 GameplayTag / ResponseTable / Ability Tag 条件体系专题，覆盖 ASC tag count、Loose/Replicated/Minimal tags、Ability tag requirements、GE tag components、`UGameplayTagReponseTable`、Tag AbilityTask、Cue/网络/蓝图/编辑器衔接。
 - `pitfalls.md`：常见坑清单，按轮次补充 ASC、Ability、GameplayEffect、AttributeSet、AbilityTask、GameplayCue、网络预测/复制相关问题。
 
 ## 优先分析顺序
 
-优先从 `quick-reference.md` 快速定位用户问题属于 ASC、GA、GE、AttributeSet、Cue、AbilityTask、网络预测/复制中的哪一类；需要源码依据时再回到 `architecture.md`、`core-classes.md`、`call-flows.md` 与对应专题文档复核。深入分析时，从 `UAbilitySystemComponent` 串联运行时核心路径，再按问题需要进入 `UGameplayAbility`、`UGameplayEffect`、`FGameplayAbilitySpec`、`FActiveGameplayEffect`、`UAttributeSet`、`UAbilityTask`、`UGameplayCueManager`、网络预测/复制与序列化相关类型。
+优先从 `quick-reference.md` 快速定位用户问题属于 ASC、GA、GE、AttributeSet、Cue、AbilityTask、网络预测/复制、GameplayTag/ResponseTable 中的哪一类；需要源码依据时再回到 `architecture.md`、`core-classes.md`、`call-flows.md` 与对应专题文档复核。深入分析时，从 `UAbilitySystemComponent` 串联运行时核心路径，再按问题需要进入 `UGameplayAbility`、`UGameplayEffect`、`FGameplayAbilitySpec`、`FActiveGameplayEffect`、`UAttributeSet`、`UAbilityTask`、`UGameplayCueManager`、`UGameplayTagReponseTable`、网络预测/复制与序列化相关类型。
 
 下一轮推荐入口：
 
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayTagResponseTable.h`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayTagResponseTable.cpp`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponent.h`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp`

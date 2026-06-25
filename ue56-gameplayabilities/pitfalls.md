@@ -618,3 +618,80 @@
 
 - `CallServerSetReplicatedTargetData` 在 batch scope 内可能只写入 `ExistingBatchData->TargetData`；没有 batch 或 batch 未 started 时才直接调用 `ServerSetReplicatedTargetData`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4217`、`:4223`、`:4230`、`:4241`、`:4245`。
 - 调试时看到客户端调用了 TargetData 发送函数，不代表独立 RPC 已立即发出；这是源码批处理路径确认的行为；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4222`。
+
+# 常见坑：GameplayTag / ResponseTable / Ability Tag 条件体系（第十二轮）
+
+## 把 GameplayCueTag 当作状态 tag 使用
+
+- GameplayCue tag 用于 CueSet/Notify 路由，`FGameplayCueParameters` 保存 `MatchedTagName` / `OriginalTag`，而角色状态查询来自 ASC `GameplayTagCountContainer`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCue_Types.h:281`、`:284`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:597`。
+- 开发实践推断：状态判断用 `State.*` / `Status.*` owned tags，表现路由用 `GameplayCue.*`，不要把 Cue 是否播放当作 gameplay state。
+
+## LooseGameplayTag 以为会自动复制
+
+- `AddLooseGameplayTag` 注释明确 loose tags 不复制，需要调用方自行保证客户端/服务端一致；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:649`、`:651`、`:652`。
+- 需要复制的手动状态应考虑 `AddReplicatedLooseGameplayTag` 或通过 GE Granted Tags 表达；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:690`、`:694`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4373`。
+
+## ReplicatedLooseTag 和 GE GrantedTag 混用导致状态不一致
+
+- ReplicatedLooseTags 和 GE GrantedTags 都会最终影响 ASC tag count，但来源与生命周期不同：ReplicatedLooseTags 由手动 API 控制，GE GrantedTags 随 ActiveGE 添加/移除；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:1966`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4373`、`:4670`。
+- 开发实践推断：同一语义状态不要同时用 replicated loose tag 和 GE granted tag 表达，除非明确设计了叠加 count 和移除顺序。
+
+## AbilityTags / ActivationOwnedTags / ActivationRequiredTags 混淆
+
+- `AbilityTags` 表示 Ability 自身分类；`ActivationOwnedTags` 是 Ability 激活期间加到 ASC 的状态；`ActivationRequiredTags` 是激活前必须存在的 ASC owned tags；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbility.h:496`、`:765`、`:769`。
+- `PreActivate` 添加 `ActivationOwnedTags`，`DoesAbilitySatisfyTagRequirements` 检查 `ActivationRequiredTags`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:963`、`:386`。
+
+## ActivationBlockedTags 配错导致 Ability 永远不能激活
+
+- `DoesAbilitySatisfyTagRequirements` 会检查 ASC owned tags 是否命中 `ActivationBlockedTags`，命中就失败并写入 blocked failure tag；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:375`、`:333`。
+- 常见错误是把 Ability 分类 tag 或永久状态 tag 配进 blocked 条件，导致角色长期拥有该 tag 时 Ability 永远失败；这是开发实践推断。
+
+## CancelAbilitiesWithTag 配错导致误取消其他技能
+
+- Ability 激活时 `ApplyAbilityBlockAndCancelTags` 会把 `CancelAbilitiesWithTag` 传给 `CancelAbilities`，排除 requesting ability；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:985`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1421`、`:1423`。
+- 开发实践推断：Cancel tag 应使用足够具体的 AbilityTags，例如取消 `Ability.Channeling`，避免用过宽的 `Ability` 根 tag。
+
+## BlockAbilitiesWithTag 配错导致技能互相锁死
+
+- 激活时 `BlockAbilitiesWithTags` 增加 `BlockedAbilityTags` count，结束时 `UnBlockAbilitiesWithTags` 减少 count；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1412`、`:1418`、`:1433`、`:1438`。
+- 如果 Ability 没正确 `EndAbility`，block tag 不会被移除；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:868`。
+
+## SourceRequiredTags / TargetRequiredTags 方向理解反了
+
+- `DoesAbilitySatisfyTagRequirements` 只在调用方传入 `SourceTags` / `TargetTags` 时检查 source/target required/blocked tags；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:376`、`:380`、`:387`、`:391`。
+- 开发实践推断：自身状态优先用 ActivationRequired/Blocked；目标状态来自 TargetData/事件/调用方填入的 TargetTags，否则 TargetRequiredTags 不会替你自动查目标 ASC。
+
+## GE Asset Tags 和 Granted Tags 混淆
+
+- Asset Tags 描述 GE 自身，Granted Tags 是 GE 应用后授予目标的状态；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2144`、`:2147`。
+- `UGameplayEffect::GetOwnedGameplayTags` 的 legacy 行为曾经与名称不一致，源码中有 ensure/warning 提醒应使用 `GetGrantedTags` 获取授予目标的 tags；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:218`、`:228`、`:235`、`:241`。
+
+## Dynamic Asset Tags 和 Dynamic Granted Tags 加错位置
+
+- `AddGrantedTag(s)` 写 `Spec->DynamicGrantedTags`，会作为运行时授予目标的 tags；`AddAssetTag(s)` 调 `AddDynamicAssetTag` / `AppendDynamicAssetTags`，会加入 Spec asset/source spec tags；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemBlueprintLibrary.cpp:1039`、`:1054`、`:1069`、`:1084`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1875`。
+- 常见错误是把状态 tag 加到 Dynamic Asset Tags，结果目标 ASC 没有该状态；或者把查询用 tag 加到 Dynamic Granted Tags，导致移除/查询条件不匹配；这是开发实践推断。
+
+## GameplayTagResponseTable 响应 GE 又授予触发 tag，造成循环
+
+- ResponseTable 监听 ASC tag event，响应时对同一 ASC `ApplyGameplayEffectToSelf`；响应 GE 的 GrantedTags 又会更新同一 ASC tag map；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayTagResponseTable.cpp:66`、`:181`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4373`。
+- 开发实践推断：Response GE 不应授予 positive/negative 触发 tag 本身，建议把触发 tag 与响应结果 tag 分层命名。
+
+## WaitGameplayTag 监听错 ASC
+
+- WaitGameplayTag base 从任务绑定的 ASC 注册 `RegisterGameplayTagEvent`，销毁时解绑；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitGameplayTagBase.cpp:17`、`:31`。
+- 开发实践推断：监听目标状态时确认 Task 绑定的是目标 ASC 还是自身 ASC；否则 tag 确实变化了但任务不触发。
+
+## UI 直接轮询 tag，而不是监听 tag event
+
+- ASC 提供 `RegisterGameplayTagEvent` 与蓝图 tag changed wrapper；`GetGameplayTagCount` 注释说明客户端可读但可能不是服务器最新值；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:743`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemBlueprintLibrary.h:99`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:690`、`:692`。
+- 开发实践推断：UI 应监听 tag event 初始化/更新状态，而不是 Tick 轮询。
+
+## MinimalReplication 模式下误以为所有 granted tags 都来自 ActiveGE 复制
+
+- Minimal replication mode 下 GEs 不复制完整数据，但它们授予的 tags 会通过 `MinimalReplicationTags` 复制；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:719`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4383`、`:4384`。
+- 调试客户端状态时，不要只看 ActiveGE 列表是否完整，还要看 ASC owned tags / MinimalReplicationTags；这是开发实践推断。
+
+## Tag 命名没有分层，导致配置难维护
+
+- 源码通过 UPROPERTY meta 区分 AbilityTagCategory、OwnedTagsCategory、SourceTagsCategory、TargetTagsCategory、GameplayCue 等用途；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbility.h:498`、`:758`、`:766`、`:778`、`:786`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbility.h:686`。
+- 命名分层建议属于开发实践推断：建议区分 `Ability.*`、`State.*`、`Status.*`、`Cooldown.*`、`GameplayCue.*`，避免一个 tag 同时承担行为分类、状态判断和表现路由。

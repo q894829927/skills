@@ -979,3 +979,100 @@ flowchart TD
 
 - `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbilityTargetTypes.cpp` 未确认存在；当前源码实际路径为 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTargetTypes.cpp:1`。
 - TargetActor 子类之外的项目级服务端命中合法性校验未确认；本轮只确认 `OnReplicatedTargetDataReceived` 是内置扩展点；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor.h:64`。
+
+# 调用链：GameplayTag / ResponseTable / Ability Tag 条件体系（第十二轮）
+
+完整专题见 `gameplay-tags-response.md`。本节保留三条主链：ASC tag count 更新、Ability 激活 tag 条件、ResponseTable 响应 GE。
+
+## ASC Tag Count 更新链
+
+```mermaid
+flowchart TD
+    A["GE GrantedTags / Ability ActivationOwnedTags / LooseTags / ReplicatedLooseTags"] --> B["ASC::UpdateTagMap 或 SetTagMapCount"]
+    B --> C["FGameplayTagCountContainer::UpdateTagCount"]
+    C --> D["UpdateExplicitTags"]
+    D --> E["GatherTagChangeDelegates"]
+    E --> F["更新 Tag 和父 Tag Count"]
+    F --> G["AnyCountChange delegate"]
+    F --> H{"0 <-> 非0?"}
+    H -->|是| I["NewOrRemoved delegate"]
+    H -->|否| J["仅 count 变化"]
+```
+
+- ASC `UpdateTagMap` 对单 tag 更新后调用 `OnTagUpdated`，容器版本在移除时会延后 parent tag 填充和 delegate 执行；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:621`、`:630`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:641`、`:665`、`:674`。
+- `FGameplayTagCountContainer` 更新 explicit tag、遍历 `Tag.GetGameplayTagParents()` 更新父 tag count，并在 significant change 时触发 NewOrRemoved；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectTypes.cpp:524`、`:567`、`:574`、`:582`、`:603`。
+- GE GrantedTags 添加/移除分别调用 `Owner->UpdateTagMap(..., 1/-1)`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4373`、`:4374`、`:4670`、`:4671`。
+- ReplicatedLooseTags / MinimalReplicationTags 通过 `FMinimalReplicationTagCountMap::UpdateOwnerTagMap` 写回 Owner ASC 的 tag map；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectTypes.cpp:1447`、`:1473`、`:1480`。
+
+## Ability 激活中的 Tag 条件链
+
+```mermaid
+flowchart TD
+    A["ASC::TryActivateAbility"] --> B["ASC::InternalTryActivateAbility"]
+    B --> C["UGameplayAbility::CanActivateAbility"]
+    C --> D["DoesAbilitySatisfyTagRequirements"]
+    D --> E["检查 ASC BlockedAbilityTags vs Ability AssetTags"]
+    E --> F["检查 Activation/Source/Target BlockedTags"]
+    F --> G["检查 Activation/Source/Target RequiredTags"]
+    G --> H{"通过?"}
+    H -->|否| I["返回 false + fail tags"]
+    H -->|是| J["CallActivateAbility"]
+    J --> K["PreActivate 添加 ActivationOwnedTags"]
+    K --> L["ApplyAbilityBlockAndCancelTags"]
+    L --> M["ActivateAbility"]
+    M --> N["EndAbility 清理 tags 和 block"]
+```
+
+简化伪代码：
+
+```cpp
+bool CanActivate()
+{
+    if (!DoesAbilitySatisfyTagRequirements(ASC, SourceTags, TargetTags, RelevantTags))
+    {
+        return false;
+    }
+    return true;
+}
+
+void PreActivate()
+{
+    ASC.AddLooseGameplayTags(ActivationOwnedTags);
+    if (Globals.ShouldReplicateActivationOwnedTags())
+    {
+        AddMinimalReplicationGameplayTags 或 AddReplicatedLooseGameplayTags;
+    }
+    ASC.ApplyAbilityBlockAndCancelTags(GetAssetTags(), this, true, BlockAbilitiesWithTag, true, CancelAbilitiesWithTag);
+}
+
+void EndAbility()
+{
+    ASC.RemoveLooseGameplayTags(ActivationOwnedTags);
+    ASC.ApplyAbilityBlockAndCancelTags(GetAssetTags(), this, false, BlockAbilitiesWithTag, false, CancelAbilitiesWithTag);
+}
+```
+
+- `DoesAbilitySatisfyTagRequirements` 的检查顺序是 blocked tags 优先，然后 required tags，最后调用 `ASC.AreAbilityTagsBlocked(GetAssetTags())`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:373`、`:386`、`:399`。
+- `PreActivate` 添加 ActivationOwnedTags，并根据 Globals 设置复制这些 tags；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:963`、`:965`、`:970`、`:974`。
+- `EndAbility` 移除 ActivationOwnedTags、Minimal/Replicated 版本，并关闭 BlockAbilitiesWithTag；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:837`、`:844`、`:848`、`:868`。
+
+## GameplayTagResponseTable 响应链
+
+```mermaid
+flowchart TD
+    A["DeveloperSettings.GameplayTagResponseTableName"] --> B["AbilitySystemGlobals::GetGameplayTagResponseTable"]
+    B --> C["ASC::InitAbilityActorInfo"]
+    C --> D["RegisterResponseForEvents"]
+    D --> E["RegisterGameplayTagEvent(Positive/Negative, AnyCountChange)"]
+    E --> F["TagResponseEvent"]
+    F --> G["GetAggregatedStackCount Positive/Negative"]
+    G --> H["TotalCount = Positive - Negative"]
+    H --> I{">0 / <0 / =0"}
+    I -->|>0| J["Remove negative handles; Apply/Update positive GE"]
+    I -->|<0| K["Remove positive handles; Apply/Update negative GE"]
+    I -->|=0| L["Remove both"]
+```
+
+- Globals 初始化阶段会加载 ResponseTable；ASC `InitAbilityActorInfo` 会注册表；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:81`、`:625`、`:630`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:186`、`:188`。
+- ResponseTable 用 `AnyCountChange` 监听 positive/negative tag，这意味着 GE stack count 变化也会重新计算响应；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayTagResponseTable.cpp:66`、`:70`。
+- 响应 GE 已存在时更新 ActiveGE level；不存在时 `ApplyGameplayEffectToSelf`；归零或反向时移除旧 handles；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayTagResponseTable.cpp:120`、`:128`、`:132`、`:152`、`:174`、`:181`。

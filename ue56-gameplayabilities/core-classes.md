@@ -457,3 +457,35 @@ ASC `BlockedAbilityTags` 的关系：Ability 的 `BlockAbilitiesWithTag` 通过 
 
 - 用户给出的 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbilityTargetTypes.cpp` 当前未确认存在；实际实现路径是 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTargetTypes.cpp:1`。
 - `AGameplayAbilityTargetActor_ActorPlacement` 的 `PlacedActorClass` 注释写 replication purpose not implemented yet，因此其放置 Actor 复制支持未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor_ActorPlacement.h:25`。
+
+# 核心类：GameplayTag / GameplayTagResponseTable / Ability Tag 条件体系（第十二轮）
+
+完整专题见 `gameplay-tags-response.md`。本节只保留索引和速查，便于从 ASC、Ability、GE、Cue、网络复制快速跳到 tag 驱动体系。
+
+## 类定位索引
+
+- ASC 的 owned tag 主账本是 `FGameplayTagCountContainer GameplayTagCountContainer`，`HasMatchingGameplayTag`、`HasAllMatchingGameplayTags`、`HasAnyMatchingGameplayTags`、`GetOwnedGameplayTags` 都围绕它查询；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:576`、`:581`、`:586`、`:597`、`:1905`。
+- `FGameplayTagCountContainer` 维护层级 tag count、explicit tag count、tag event delegate；0/非0 变化触发 `NewOrRemoved`，任意 count 变化触发 `AnyCountChange`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:1043`、`:1259`、`:1298`、`:1301`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectTypes.cpp:582`、`:597`。
+- Loose GameplayTags 不复制；Replicated Loose Tags 通过 `FMinimalReplicationTagCountMap ReplicatedLooseTags` 复制；Minimal replication mode 下 GE granted tags 通过 `MinimalReplicationTags` 补充给非 owner；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:649`、`:690`、`:719`、`:1966`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1642`、`:1657`。
+- Ability tag 条件集中在 `UGameplayAbility`：`AbilityTags`/AssetTags 表达 Ability 分类，`ActivationOwnedTags` 表达激活期间拥有状态，Required/Blocked tags 决定 CanActivate，Cancel/Block tags 决定激活时对其他 Ability 的取消/阻塞；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbility.h:496`、`:757`、`:761`、`:765`、`:769`、`:773`。
+- GE tag 体系在 UE5.6 中主要由 GEComponents 承载：`UAssetTagsGameplayEffectComponent` 配 Asset Tags，`UTargetTagsGameplayEffectComponent` 配 Granted Tags，`UTargetTagRequirementsGameplayEffectComponent` 配 Application/Ongoing/Removal requirements，旧字段已 deprecated；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/AssetTagsGameplayEffectComponent.h:13`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/TargetTagsGameplayEffectComponent.h:13`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/TargetTagRequirementsGameplayEffectComponent.h:15`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2311`、`:2316`、`:2326`。
+- GameplayTagResponseTable 的实际类名是 `UGameplayTagReponseTable`，源码历史拼写少了一个 `s`；它监听 ASC tag count，并用 positive/negative count 差应用、移除或更新响应 GE level；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayTagResponseTable.h:19`、`:41`、`:55`、`:62`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayTagResponseTable.cpp:98`、`:120`、`:181`。
+- `UAbilitySystemGlobals` 从 `UGameplayAbilitiesDeveloperSettings::GameplayTagResponseTableName` 加载 ResponseTable；ASC 在 `InitAbilityActorInfo` 过程中注册表的 tag event；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayAbilitiesDeveloperSettings.h:102`、`:104`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:625`、`:630`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:186`。
+
+## GameplayTag / ResponseTable 速查
+
+- 判断状态：优先查 ASC owned tags，即 `HasMatchingGameplayTag` / `GetGameplayTagCount`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:576`、`:686`。
+- 监听状态：C++ 用 `RegisterGameplayTagEvent`，蓝图用 `UAbilitySystemBlueprintLibrary::BindEventWrapperToGameplayTagChanged`，Ability 内异步等待用 WaitGameplayTag 系列 task；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:743`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemBlueprintLibrary.h:99`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask_WaitGameplayTagBase.h:15`。
+- 授予持续状态：优先用 GE Granted Tags；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2147`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4373`。
+- Ability 激活期间的临时状态：用 `ActivationOwnedTags`，结束时自动清；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:963`、`:837`。
+- 不需要 GE 的手动状态：本地用 Loose Tags，需要复制时用 Replicated Loose Tags；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:649`、`:690`。
+- 全局 tag count 到 GE 响应：用 `UGameplayTagReponseTable`，注意触发 tag 与响应 GE granted tags 避免互相递归；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayTagResponseTable.h:55`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayTagResponseTable.cpp:66`、`:181`。
+- 表现路由：用 `GameplayCue.*` tag，不建议把 GameplayCueTag 当核心状态 tag；开发实践推断，源码依据是 Cue tag 用于 CueSet/Notify 路由，而状态查询来自 ASC tag count；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueSet.h:18`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:597`。
+
+## 第十二轮未确认项
+
+- `UGameplayTagReponseTable` 是否有专门编辑器 details customization，本轮未确认。
+- `UBlockAbilityTagsGameplayEffectComponent` 在 ActiveGE add/remove 时具体如何把 `CachedBlockedAbilityTags` 接入 ASC `BlockedAbilityTags` 的完整调用链，本轮未完全展开，未确认。
+- `UAbilityTask_WaitGameplayTagQuery` 的完整内部实现本轮未逐行展开，未确认。
+- GameplayTagResponseTable 响应 GE 与 GE stacking policy 的全部组合行为，本轮未完整展开，未确认。
+- 预测失败后 tag 变化的完整回滚路径，本轮未展开，未确认。

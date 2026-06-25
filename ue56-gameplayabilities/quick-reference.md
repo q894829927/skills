@@ -411,3 +411,49 @@ GameplayCueParameters 通过 EffectContext 获得命中上下文
 ```
 
 源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemBlueprintLibrary.cpp:592`、`:605`、`:636`、`:678`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTargetTypes.cpp:21`、`:45`、`:67`、`:72`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:420`、`:425`。
+
+---
+
+## 14. GameplayTag / ResponseTable 速查
+
+一句话记忆：
+
+```text
+ASC TagCount = 状态账本
+Ability Tags = 技能分类与激活条件
+GE Granted Tags = 效果授予的状态
+ResponseTable = TagCount 变化自动转成响应 GE
+```
+
+| 需求 | 推荐入口 | 注意点 |
+|---|---|---|
+| 判断角色是否有状态 | `ASC::HasMatchingGameplayTag` / `GetGameplayTagCount` | 客户端读取可能受网络延迟影响；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:576`、`:686`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:690` |
+| 监听状态变化 | `RegisterGameplayTagEvent` / 蓝图 wrapper / WaitGameplayTag task | `NewOrRemoved` 只看 0/非0，`AnyCountChange` 看任意 count 变化；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:743`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemBlueprintLibrary.h:99`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask_WaitGameplayTagBase.h:15` |
+| Ability 激活期间给自己加状态 | `ActivationOwnedTags` | `PreActivate` 添加，`EndAbility` 移除；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbility.h:765`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:963`、`:837` |
+| Ability 释放前要求/禁止状态 | `ActivationRequiredTags` / `ActivationBlockedTags` | 在 `DoesAbilitySatisfyTagRequirements` 中检查 ASC owned tags；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbility.h:769`、`:773`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:386` |
+| Ability 互斥/打断 | `CancelAbilitiesWithTag` / `BlockAbilitiesWithTag` | 激活时 cancel/block，结束时 unblock；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbility.h:757`、`:761`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1410` |
+| Buff/Debuff/Cooldown 授予状态 | GE Granted Tags | UE5.6 建议通过 `UTargetTagsGameplayEffectComponent` 配置；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/TargetTagsGameplayEffectComponent.h:13`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2147` |
+| 不想创建 GE 的手动状态 | Loose Tags | 默认不复制；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:649` |
+| 手动状态需要复制 | Replicated Loose Tags | 会覆盖 simulated proxies 上本地 tag count；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:690`、`:694` |
+| Minimal 模式下需要同步 GE granted tags | `MinimalReplicationTags` | 由 GE/Ability 内部维护，通常不手动操作；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:719`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4383` |
+| Tag count 自动驱动 GE 响应 | `UGameplayTagReponseTable` | 注意源码类名拼写是 `Reponse`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayTagResponseTable.h:62` |
+| 表现事件 | GameplayCueTag | 开发实践推断：`GameplayCue.*` 只做表现路由，不要当状态 tag；源码依据：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayCueSet.h:18`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:597` |
+
+Tag 语义选择：
+
+| Tag 类型 | 推荐命名（开发实践推断） | 用途 |
+|---|---|---|
+| 行为分类 | `Ability.Attack.Melee` | AbilityTags，供 cancel/block/query |
+| 角色状态 | `State.Stunned` / `State.Casting` | ASC owned tags、ActivationOwnedTags、GE Granted Tags |
+| 效果状态 | `Status.Haste` / `Status.Slow` | GE Granted Tags 或 ResponseTable 触发 tag |
+| 冷却 | `Cooldown.Fireball` | Cooldown GE Granted Tags |
+| 表现 | `GameplayCue.Fireball.Impact` | Cue 路由 |
+
+ResponseTable 必查：
+
+| 问题 | 优先检查 |
+|---|---|
+| 表没生效 | `GameplayTagResponseTableName` 是否配置，ASC 是否调用过 `InitAbilityActorInfo`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayAbilitiesDeveloperSettings.h:104`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:186` |
+| 响应强度不对 | Positive/Negative 是否抵消，`SoftCountCap` 是否截断，ResponseTable 用的是 `GetAggregatedStackCount`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayTagResponseTable.cpp:111`、`:112`、`:142`、`:143` |
+| 响应 GE 没移除 | TotalCount 是否归零或反向；handles 是否有效；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayTagResponseTable.cpp:120`、`:132`、`:152` |
+| 响应循环 | 响应 GE 是否又授予触发 tag；开发实践推断，源码依据：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayTagResponseTable.cpp:66`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4373` |

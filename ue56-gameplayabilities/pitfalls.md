@@ -695,3 +695,75 @@
 
 - 源码通过 UPROPERTY meta 区分 AbilityTagCategory、OwnedTagsCategory、SourceTagsCategory、TargetTagsCategory、GameplayCue 等用途；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbility.h:498`、`:758`、`:766`、`:778`、`:786`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbility.h:686`。
 - 命名分层建议属于开发实践推断：建议区分 `Ability.*`、`State.*`、`Status.*`、`Cooldown.*`、`GameplayCue.*`，避免一个 tag 同时承担行为分类、状态判断和表现路由。
+---
+
+# 常见坑：GameplayEffectComponent / GEComponents（第十三轮）
+
+## 旧版 GE 字段和 GEComponents 混用导致配置理解错误
+
+- UE5.6 中 `ChanceToApplyToTarget_DEPRECATED`、`ApplicationRequirements_DEPRECATED`、`ConditionalGameplayEffects`、旧 tag containers、immunity/remove query 等字段已经标记 deprecated，并由转换函数迁移到组件；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2253`、`:2258`、`:2262`、`:2310`、`:2350`、`:2359`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:437`、`:448`。
+- 新配置优先看 `GEComponents` 数组；旧字段仍可能为兼容读取被回填，不能把它们当作新项目主配置入口；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2421`、`:2422`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:831`、`:851`。
+
+## Asset Tags 和 Target Granted Tags 混淆
+
+- Asset Tags 描述 GE 自身，不授予目标；Granted Tags 会在 ActiveGE 添加时进入目标 ASC tag count，移除时减少；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2143`、`:2147`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4373`、`:4670`。
+- 新配置分别对应 `UAssetTagsGameplayEffectComponent` 与 `UTargetTagsGameplayEffectComponent`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/AssetTagsGameplayEffectComponent.h:13`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/TargetTagsGameplayEffectComponent.h:13`。
+
+## Instant GE 配置 OngoingTagRequirements / GrantedTags / GrantAbilities
+
+- `UTargetTagRequirementsGameplayEffectComponent::IsDataValid` 对 Instant GE 配 OngoingTagRequirements 报 invalid；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/TargetTagRequirementsGameplayEffectComponent.cpp:165`、`:172`。
+- `UTargetTagsGameplayEffectComponent`、`UBlockAbilityTagsGameplayEffectComponent`、`UAbilitiesGameplayEffectComponent` 都会对 Instant GE 上的持续型配置报 invalid；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/TargetTagsGameplayEffectComponent.cpp:42`、`:50`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/BlockAbilityTagsGameplayEffectComponent.cpp:41`、`:49`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/AbilitiesGameplayEffectComponent.cpp:175`、`:180`。
+
+## TargetTagRequirements 方向理解错误
+
+- TargetTagRequirements 组件读取目标 ASC owned tags 来检查 Application/Removal/Ongoing requirements；Application 不满足或 Removal 已满足会阻止应用，Ongoing 不满足会 inhibit 已添加 ActiveGE；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/TargetTagRequirementsGameplayEffectComponent.cpp:21`、`:24`、`:29`、`:143`。
+- 开发实践推断：如果你想检查施法者状态，应确认这些 tag 是否通过 Spec source tags / Ability 条件表达，而不是误放到 TargetTagRequirements；源码依据是该组件使用 `ActiveGEContainer.Owner->GetOwnedGameplayTags` 获取目标 ASC tags；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/TargetTagRequirementsGameplayEffectComponent.cpp:21`、`:132`。
+
+## BlockAbilityTags GE 移除后没有按预期解除阻塞
+
+- BlockAbilityTags 通过 ActiveGE 添加时 `Owner->BlockAbilitiesWithTags(GetBlockedAbilityTags())`、移除时 `UnBlockAbilitiesWithTags` 维护计数；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4377`、`:4674`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1433`、`:1438`。
+- 如果同一 blocked tag 有多个来源，移除一个 GE 只减少一次 count；开发实践推断：排查时看是否还有其他 Ability/GE 也在阻塞同一 tag。源码依据：ASC `BlockedAbilityTags` 使用 `UpdateTagCount`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1435`、`:1440`。
+
+## Immunity Query 写错导致 GE 永远无法应用
+
+- Immunity 组件会把 `AllowGameplayEffectApplication` 注册到 ASC `GameplayEffectApplicationQueries`，incoming GE 匹配任一 `ImmunityQueries` 时返回 false 阻止应用；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/ImmunityGameplayEffectComponent.cpp:24`、`:66`、`:70`。
+- `FGameplayEffectQuery` 可以按 owning/effect/source tags、attribute、source、definition、自定义 delegate 匹配；写得过宽会屏蔽过多 GE；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:1460`、`:1464`、`:1468`、`:1476`、`:1480`、`:1484`。
+
+## RemoveOther Query 写太宽导致清掉不该清的 GE
+
+- RemoveOther 组件应用成功后在 authority 上遍历 `RemoveGameplayEffectQueries` 并调用 `RemoveActiveEffects`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/RemoveOtherGameplayEffectComponent.cpp:16`、`:18`、`:39`。
+- 组件会设置 `IgnoreHandles` 避免移除自身，但不会替项目保护其他语义上不该移除的 GE；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/RemoveOtherGameplayEffectComponent.cpp:23`、`:40`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:1488`。
+
+## AdditionalEffects 触发递归或重复应用
+
+- AdditionalEffects 在 `OnGameplayEffectApplied` 中继续调用 `ApplyGameplayEffectSpecToSelf`，完成时也会在 OnEffectRemoved 中应用 OnComplete GE；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/AdditionalEffectsGameplayEffectComponent.cpp:74`、`:111`。
+- 开发实践推断：如果附加 GE 又配置回触发原 GE，或完成 GE 又触发同一链路，可能形成递归/重复应用；源码依据是 AdditionalEffects 没有全局递归保护，只按配置创建和应用 spec；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/AdditionalEffectsGameplayEffectComponent.cpp:34`、`:74`。
+
+## GrantedAbilities 依赖 ActiveGE 生命周期但 GE 被提前移除
+
+- Abilities 组件在 ActiveGE 添加时绑定 OnEffectRemoved / OnInhibitionChanged，移除时按 RemovalPolicy 清理 Ability；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/AbilitiesGameplayEffectComponent.cpp:147`、`:151`、`:152`、`:158`。
+- RemovalPolicy 为 `CancelAbilityImmediately` 会 `ClearAbility`，`RemoveAbilityOnEnd` 会 `SetRemoveAbilityOnEnd`，提前移除 ActiveGE 会提前触发这些策略；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/AbilitiesGameplayEffectComponent.cpp:124`、`:128`、`:133`。
+
+## ChanceToApply 在预测客户端和服务器结果不一致
+
+- ChanceToApply 用 `FMath::FRand()` 和 scalable float 结果决定是否阻止应用；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/ChanceToApplyGameplayEffectComponent.cpp:24`、`:27`。
+- 开发实践推断：LocalPredicted GE 如果客户端和服务器都执行随机判定，可能出现客户端预测成功但服务器失败，或反之；源码依据是客户端有 prediction key 时也会进入 `ApplyGameplayEffectSpecToSelf`，而 periodic 之外的 GE 可以预测；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:812`、`:862`。
+
+## CustomCanApply 写入有副作用逻辑
+
+- CustomCanApply 在应用前检查阶段调用 requirement CDO 的 `CanApplyGameplayEffect`，任一 false 就阻止应用；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/CustomCanApplyGameplayEffectComponent.cpp:13`、`:18`、`:21`。
+- 开发实践推断：`CanApply` 类逻辑应保持只读/无副作用；源码依据是同一检查可能发生在预测、服务端或重复尝试应用时，并且组件本身是 GE 资产单例；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponent.h:23`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:844`。
+
+## Response GE 又授予触发 ResponseTable 的 tag，造成循环
+
+- ResponseTable 会监听 ASC tag count 并对同一 ASC 应用/移除响应 GE；GE granted tags 又会更新同一 ASC tag map；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayTagResponseTable.cpp:66`、`:181`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4373`。
+- 开发实践推断：Response GE 不应再授予 positive/negative 触发 tag 本身，建议把触发 tag 和响应结果 tag 分层命名。
+
+## GEComponents 写成复杂战斗系统核心
+
+- GEComponents 是 GE 资产配置子对象，源码注释明确只有一个 component 供所有 applied instances 共享，不应存 per-execution runtime state；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponent.h:23`、`:24`。
+- 开发实践推断：复杂结算优先放 ExecutionCalculation / Ability / 项目战斗系统，GEComponent 更适合声明式配置和轻量 hook；源码依据是 GE 到组件的调用点较少，注释要求实现者仔细阅读 GE flow 并注册回调；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponent.h:19`、`:20`。
+
+## 以为 GEComponents 本身会复制运行时状态
+
+- GEComponents 本身是 GE 内的 instanced 配置对象，不是每个 ActiveGE 的复制状态；ActiveGE、MinimalReplicationTags、GameplayCue、Attribute 等结果才走对应复制路径；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2422`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponent.h:23`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:719`。

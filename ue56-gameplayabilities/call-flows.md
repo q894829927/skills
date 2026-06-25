@@ -1076,3 +1076,69 @@ flowchart TD
 - Globals 初始化阶段会加载 ResponseTable；ASC `InitAbilityActorInfo` 会注册表；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:81`、`:625`、`:630`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:186`、`:188`。
 - ResponseTable 用 `AnyCountChange` 监听 positive/negative tag，这意味着 GE stack count 变化也会重新计算响应；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayTagResponseTable.cpp:66`、`:70`。
 - 响应 GE 已存在时更新 ActiveGE level；不存在时 `ApplyGameplayEffectToSelf`；归零或反向时移除旧 handles；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayTagResponseTable.cpp:120`、`:128`、`:132`、`:152`、`:174`、`:181`。
+## GameplayEffectComponent 调用链（第十三轮）
+
+```mermaid
+flowchart TD
+    A["ASC::ApplyGameplayEffectSpecToSelf"] --> B["authority / prediction / periodic checks"]
+    B --> C["ASC::GameplayEffectApplicationQueries"]
+    C --> D["UGameplayEffect::CanApply"]
+    D --> E["GEComponents::CanGameplayEffectApply"]
+    E -->|"false"| X["return empty handle"]
+    E -->|"true"| F{"Instant?"}
+    F -->|"Duration / Infinite / predicted Instant"| G["ActiveGameplayEffects.ApplyGameplayEffectSpec"]
+    G --> H["InternalOnActiveGameplayEffectAdded"]
+    H --> I["UGameplayEffect::OnAddedToActiveContainer"]
+    I --> J["GEComponents::OnActiveGameplayEffectAdded"]
+    J --> K["SetActiveGameplayEffectInhibit"]
+    F -->|"non-predicted Instant"| L["ExecuteGameplayEffect"]
+    L --> M["UGameplayEffect::OnExecuted"]
+    M --> N["GEComponents::OnGameplayEffectExecuted"]
+    K --> O["UGameplayEffect::OnApplied"]
+    N --> O
+    O --> P["GEComponents::OnGameplayEffectApplied"]
+    K --> Q["ActiveGE removed later"]
+    Q --> R["component-bound OnEffectRemoved delegates"]
+```
+
+简化伪代码：
+
+```cpp
+if (!ASC.HasNetworkAuthorityToApplyGameplayEffect(PredictionKey))
+{
+    return {};
+}
+
+for (const FGameplayEffectApplicationQuery& Query : ASC.GameplayEffectApplicationQueries)
+{
+    if (!Query.Execute(ASC.ActiveGameplayEffects, Spec))
+    {
+        return {};
+    }
+}
+
+if (!Spec.Def->CanApply(ASC.ActiveGameplayEffects, Spec))
+{
+    return {};
+}
+
+if (Spec.Def->DurationPolicy != Instant || bTreatPredictedInstantAsInfinite)
+{
+    ActiveGE = ASC.ActiveGameplayEffects.ApplyGameplayEffectSpec(Spec, PredictionKey);
+    // InternalOnActiveGameplayEffectAdded -> Def->OnAddedToActiveContainer -> GEComponents
+}
+else
+{
+    ASC.ExecuteGameplayEffect(SpecCopy, PredictionKey);
+    // ExecuteGameplayEffect -> Def->OnExecuted -> GEComponents
+}
+
+Spec.Def->OnApplied(ASC.ActiveGameplayEffects, SpecCopy, PredictionKey);
+```
+
+- `ApplyGameplayEffectSpecToSelf` 先做 authority / prediction 检查，并拒绝客户端预测 periodic GE；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:812`、`:819`、`:827`。
+- ASC 的 `GameplayEffectApplicationQueries` 在 GEComponents `CanApply` 之前执行；Immunity 组件正是通过这个数组阻止后续 incoming GE；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:833`、`:844`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/ImmunityGameplayEffectComponent.cpp:24`。
+- `UGameplayEffect::CanApply` 会遍历 `GEComponents` 调 `CanGameplayEffectApply`，任意 false 会阻止应用；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:881`、`:883`、`:885`。
+- Duration / Infinite / predicted Instant 会进入 ActiveGE 容器，进而触发 `OnAddedToActiveContainer`；non-predicted Instant 走 `ExecuteGameplayEffect`，进而触发 `OnExecuted`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:862`、`:876`、`:950`、`:953`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4305`、`:3224`。
+- `OnApplied` 发生在 ActiveGE 添加或 Instant execute 之后，不因 periodic execute 或复制触发；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:956`、`:957`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponent.h:63`、`:64`。
+- ActiveGE 移除没有基类统一 `OnActiveGameplayEffectRemoved` hook；需要清理的组件通过 `ActiveGE.EventSet.OnEffectRemoved` 自行绑定 delegate；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/AbilitiesGameplayEffectComponent.cpp:151`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/AdditionalEffectsGameplayEffectComponent.cpp:13`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/TargetTagRequirementsGameplayEffectComponent.cpp:96`。

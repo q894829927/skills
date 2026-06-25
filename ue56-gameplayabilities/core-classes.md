@@ -489,3 +489,38 @@ ASC `BlockedAbilityTags` 的关系：Ability 的 `BlockAbilitiesWithTag` 通过 
 - `UAbilityTask_WaitGameplayTagQuery` 的完整内部实现本轮未逐行展开，未确认。
 - GameplayTagResponseTable 响应 GE 与 GE stacking policy 的全部组合行为，本轮未完整展开，未确认。
 - 预测失败后 tag 变化的完整回滚路径，本轮未展开，未确认。
+
+# 核心类：GameplayEffectComponent / GEComponents（第十三轮）
+
+完整专题见 `gameplay-effect-components.md`。本节只保留索引，便于从 GameplayEffect、GameplayTag、网络预测和编辑器配置快速跳转。
+
+## 类定位索引
+
+- `UGameplayEffectComponent` 是 `UGameplayEffect` 内的配置子对象基类，源码注释明确 GEComponents 住在 GameplayEffect 内，并且一个 GEComponent 会被所有应用实例共享，因此不应保存每次应用的运行时状态；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponent.h:17`、`:23`、`:24`。
+- `UGameplayEffect` 用 `GEComponents` 数组保存组件，属性是 `Instanced`，编辑器显示名为 `Components`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2421`、`:2422`、`:2423`。
+- GEComponents 的核心 hook 是 `CanGameplayEffectApply`、`OnActiveGameplayEffectAdded`、`OnGameplayEffectExecuted`、`OnGameplayEffectApplied`、`OnGameplayEffectChanged` 和编辑器 `IsDataValid`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponent.h:47`、`:54`、`:60`、`:66`、`:71`、`:81`。
+- `UGameplayEffect::CanApply`、`OnAddedToActiveContainer`、`OnExecuted`、`OnApplied` 会遍历 `GEComponents` 并调用对应 hook；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:881`、`:895`、`:911`、`:924`。
+- UE5.6 实际扫描到 10 个 GEComponent：AssetTags、TargetTags、TargetTagRequirements、BlockAbilityTags、Immunity、RemoveOther、AdditionalEffects、ChanceToApply、CustomCanApply、Abilities；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents`。
+- 当前扫描范围未确认存在 `UGameplayCueComponent` 或等价 GEComponent；`UGameplayEffect::GameplayCues` 字段仍存在，并仍由 GE/ActiveGE 路径触发；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2299`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4414`。
+
+## 组件职责索引
+
+| 组件 | 什么时候看它 | 源码路径 |
+|---|---|---|
+| `UAssetTagsGameplayEffectComponent` | GE 自身 asset tags / 查询分类 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/AssetTagsGameplayEffectComponent.h:13`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/AssetTagsGameplayEffectComponent.cpp:63` |
+| `UTargetTagsGameplayEffectComponent` | GE 授予目标 ASC 的 granted tags | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/TargetTagsGameplayEffectComponent.h:13`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4373` |
+| `UTargetTagRequirementsGameplayEffectComponent` | Application/Ongoing/Removal tag requirements | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/TargetTagRequirementsGameplayEffectComponent.h:15`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/TargetTagRequirementsGameplayEffectComponent.cpp:19`、`:143` |
+| `UBlockAbilityTagsGameplayEffectComponent` | GE 存在期间阻塞一类 Ability | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/BlockAbilityTagsGameplayEffectComponent.h:13`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4377`、`:4674` |
+| `UImmunityGameplayEffectComponent` | ActiveGE 存在期间免疫 incoming GE | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/ImmunityGameplayEffectComponent.h:16`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/ImmunityGameplayEffectComponent.cpp:24`、`:66` |
+| `URemoveOtherGameplayEffectComponent` | 本 GE 应用成功后移除其他 ActiveGE | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/RemoveOtherGameplayEffectComponent.h:15`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/RemoveOtherGameplayEffectComponent.cpp:16`、`:39` |
+| `UAdditionalEffectsGameplayEffectComponent` | 应用成功或 ActiveGE 移除时附加 GE | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/AdditionalEffectsGameplayEffectComponent.h:13`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/AdditionalEffectsGameplayEffectComponent.cpp:22`、`:98` |
+| `UChanceToApplyGameplayEffectComponent` | GE 概率应用 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/ChanceToApplyGameplayEffectComponent.h:14`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/ChanceToApplyGameplayEffectComponent.cpp:24` |
+| `UCustomCanApplyGameplayEffectComponent` | 自定义应用条件 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/CustomCanApplyGameplayEffectComponent.h:14`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/CustomCanApplyGameplayEffectComponent.cpp:18` |
+| `UAbilitiesGameplayEffectComponent` | ActiveGE 存在期间授予 Ability | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents/AbilitiesGameplayEffectComponent.h:38`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/AbilitiesGameplayEffectComponent.cpp:44`、`:98` |
+
+## 第十三轮未确认项
+
+- GEComponents 本身作为 GE asset subobject 的 cook/load/asset replication 细节未展开，未确认。
+- 当前扫描范围未发现 `UGameplayCueComponent`；是否存在项目侧或其他模块扩展，未确认。
+- `GameplayEffectDetails` 是否提供 GEComponents 专门添加/删除/排序 UI，当前在指定编辑器文件中未确认。
+- Prediction reject / rollback 时，由 AdditionalEffects、ChanceToApply、Immunity query 引发的所有表现清理细节未完整展开，未确认。

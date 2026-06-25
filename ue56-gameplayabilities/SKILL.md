@@ -32,6 +32,7 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 - `core-classes.md`：核心类笔记，已覆盖 `UAbilitySystemComponent`、`UGameplayAbility`，并索引 GameplayEffect 体系。
 - `call-flows.md`：调用链笔记，已覆盖 Ability 激活链、Ability 生命周期、GameplayEffect 应用链。
 - `gameplay-effects.md`：第四轮 GameplayEffect 专题，覆盖 `UGameplayEffect`、`FGameplayEffectSpec`、`FActiveGameplayEffect`、Modifier、Duration/Period、Stacking、GameplayCue、Cost/Cooldown 接入和 GEComponents 概览。
+- `gameplay-effect-components.md`：第十三轮 GameplayEffectComponent / GEComponents 深入专题，覆盖 `UGameplayEffectComponent` 基类 hook、10 个内置 GEComponent、GE 应用/激活/移除接入、deprecated 字段迁移、Tag/Ability/Cue/网络/编辑器衔接与配置速查。
 - `attributes.md`：第五轮 AttributeSet 专题，覆盖 `UAttributeSet`、`FGameplayAttributeData`、`FGameplayAttribute`、ASC 管理 AttributeSet、属性定义/复制、属性回调、GE 修改 Attribute、Base/Current、Damage/Healing 和 UI delegate 绑定。
 - `ability-tasks.md`：第六轮 AbilityTask / GameplayTask 专题，覆盖 `UAbilityTask`、`UGameplayTask`、`UGameplayTasksComponent`、Ability `ActiveTasks`、常见 Task 分类、输入/事件/蒙太奇/TargetData/GE/Tag/Attribute 监听流程和预测接入点。
 - `gameplay-cues.md`：第七轮 GameplayCue 专题，覆盖 `UGameplayCueManager`、`UGameplayCueSet`、`GameplayCueNotify` 类型、`FGameplayCueParameters`、ASC/GE 触发路径、Notify 生命周期、复制与加载机制。
@@ -48,7 +49,9 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 
 下一轮推荐入口：
 
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponents`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponent.h`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectExecutionCalculation.h`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectExecutionCalculation.cpp`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayModMagnitudeCalculation.h`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayModMagnitudeCalculation.cpp`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectCalculation.h`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h`

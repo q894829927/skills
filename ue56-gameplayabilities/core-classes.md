@@ -524,3 +524,24 @@ ASC `BlockedAbilityTags` 的关系：Ability 的 `BlockAbilitiesWithTag` 通过 
 - 当前扫描范围未发现 `UGameplayCueComponent`；是否存在项目侧或其他模块扩展，未确认。
 - `GameplayEffectDetails` 是否提供 GEComponents 专门添加/删除/排序 UI，当前在指定编辑器文件中未确认。
 - Prediction reject / rollback 时，由 AdditionalEffects、ChanceToApply、Immunity query 引发的所有表现清理细节未完整展开，未确认。
+---
+
+# 数值计算核心类索引（第十四轮）
+
+详细专题见 `calculations-captures.md`。本节只保留核心类定位与源码入口，方便从总览文档跳转。
+
+| 类型 | 定位 | 关键源码 |
+|---|---|---|
+| `UGameplayEffectCalculation` | GE 计算基类，提供 `RelevantAttributesToCapture` 供派生类声明属性捕获 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectCalculation.h:13`、`:22`、`:26` |
+| `UGameplayEffectExecutionCalculation` | ExecutionCalculation，执行时可通过 `FGameplayEffectCustomExecutionOutput` 输出多个 evaluated modifiers | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectExecutionCalculation.h:260`、`:304`、`:229` |
+| `UGameplayModMagnitudeCalculation` | MMC，只为一个 modifier magnitude 返回 base magnitude | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayModMagnitudeCalculation.h:14`、`:29` |
+| `FGameplayEffectAttributeCaptureDefinition` | 描述捕获哪个 Attribute、Source/Target、是否 Snapshot | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectAttributeCaptureDefinition.h:23`、`:39`、`:43`、`:47` |
+| `FGameplayEffectAttributeCaptureSpecContainer` | `FGameplayEffectSpec` 中保存 Source/Target capture specs 的容器；`CapturedRelevantAttributes` 标记 `NotReplicated` | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:900`、`:1176` |
+| `FGameplayEffectModifierMagnitude` | Modifier magnitude 配置，支持 ScalableFloat、AttributeBased、CustomCalculationClass、SetByCaller | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:67`、`:276` |
+| `FAggregator` | 聚合 Attribute base value 与 ActiveGE modifiers，负责 Evaluate 与 dirty/依赖通知 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectAggregator.h:278`、`:307`、`:329` |
+
+开发判断：
+
+- 一个 modifier 的数值来源优先从 `FGameplayEffectModifierMagnitude` 判断；复杂多属性输出再看 `UGameplayEffectExecutionCalculation`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1136`、`:3136`、`:3146`。
+- Snapshot/Non-Snapshot 问题优先看 `FGameplayEffectAttributeCaptureDefinition::bSnapshot` 与 `FActiveGameplayEffectsContainer::CaptureAttributeForGameplayEffect`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectAttributeCaptureDefinition.h:47`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3751`。
+- Aggregator op 结果不符合预期时，优先核对 `EGameplayModOp` 公式和 `FAggregatorModChannel::EvaluateWithBase`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:116`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectAggregator.cpp:76`、`:98`。

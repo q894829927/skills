@@ -767,3 +767,81 @@
 ## 以为 GEComponents 本身会复制运行时状态
 
 - GEComponents 本身是 GE 内的 instanced 配置对象，不是每个 ActiveGE 的复制状态；ActiveGE、MinimalReplicationTags、GameplayCue、Attribute 等结果才走对应复制路径；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2422`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponent.h:23`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:719`。
+---
+
+# 常见坑：ExecutionCalculation / MMC / Attribute Capture（第十四轮）
+
+## 把 MMC 当成能输出多个 Attribute 修改
+
+- `UGameplayModMagnitudeCalculation::CalculateBaseMagnitude` 只返回一个 float；它接入的是 `FGameplayEffectModifierMagnitude` 的 CustomCalculationClass 分支；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayModMagnitudeCalculation.h:29`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1066`。
+- 多属性输出应看 `FGameplayEffectCustomExecutionOutput::OutputModifiers`，这是 ExecutionCalculation 路径；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectExecutionCalculation.h:242`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3146`。
+
+## 把 ExecutionCalculation 当成持续 buff 的普通 modifier
+
+- Execution 在 `ExecuteActiveEffectsFrom` 中执行，输出 modifiers 会走 `InternalExecuteMod` 直接修改 base；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3065`、`:3136`、`:3155`、`:3907`。
+- 持续属性修正通常由 Duration/Infinite GE 的普通 modifiers 加入 aggregator；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4347`、`:4350`。这是开发实践推断。
+
+## Attribute Capture Source / Target 方向写反
+
+- 捕获定义通过 `AttributeSource` 区分 Source 和 Target；Source 捕获来自 `EffectContext.GetInstigatorAbilitySystemComponent()`，Target 捕获来自目标 ASC；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectAttributeCaptureDefinition.h:43`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1764`、`:1748`。
+- Source/Target 写反会导致 `FindCaptureSpecByDefinition` 找不到或读到错误 ASC 的属性；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2500`。
+
+## Snapshot / Non-Snapshot 理解错误
+
+- Snapshot 捕获会 `TakeSnapshotOf` 当前 aggregator；Non-Snapshot 保存 aggregator 引用；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3756`、`:3760`。
+- 只有 Non-Snapshot capture 会注册 linked aggregator callback 并在依赖变化时参与重算；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2389`、`:2395`、`:3368`。
+
+## SetByCaller key 写错或忘记设置
+
+- SetByCaller 有 Name 和 GameplayTag 两套 key；setter 分别写 `SetByCallerNameMagnitudes` / `SetByCallerTagMagnitudes`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:1243`、`:1244`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2200`、`:2208`。
+- 读取缺失时会返回默认值，并在 `WarnIfNotFound` 为 true 时记录 error；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2216`、`:2238`。
+
+## AttributeBased Modifier 捕获了错误 Attribute
+
+- AttributeBased magnitude 从 `BackingAttribute` 对应的 capture spec 取值，并要求 spec 已有有效 captured attribute；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:968`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:164`。
+- `AttemptCalculateMagnitude` 会先通过 `CanCalculateMagnitude` 检查 capture defs；失败时 magnitude 变 0 并可能记录 warning；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1125`、`:1136`、`:1955`。
+
+## ExecutionCalculation 中直接修改 Actor 状态或播放表现
+
+- ExecutionCalculation 的源码接入点是数值执行：读取 params、输出 modifiers、手动标记 cues/conditional/stack；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectExecutionCalculation.h:304`、`:229`、`:220`、`:223`。
+- 开发实践推断：Actor 状态流转、表现播放、权限校验应放 Ability、GameplayCue 或项目系统；ExecutionCalculation 中写副作用会放大预测与重放风险。源码依据：预测 GE 可在客户端先执行；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2924`。
+
+## ExecutionCalculation 中写随机逻辑导致预测不一致
+
+- `PredictivelyExecuteEffectSpec` 会在有效 prediction key 下执行普通 modifiers 和 executions；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2924`、`:3001`。
+- 开发实践推断：随机、时间和外部状态应由服务端权威决定，或提前写入 SetByCaller 并保证客户端/服务端使用相同输入。
+
+## MMC 中读取外部非确定性状态
+
+- MMC 的外部依赖注册默认不允许非权威客户端；若开启且同时依赖 attribute capture，会触发 ensure；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayModMagnitudeCalculation.h:52`、`:60`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayModMagnitudeCalculation.cpp:24`。
+- 开发实践推断：MMC 适合确定性数值函数，不适合读取会在客户端/服务端不同步的外部 mutable 状态。
+
+## DOT / HOT 周期执行和 Duration modifier 混淆
+
+- Instant/Periodic execute 路径会直接执行 modifier 并修改 base；Duration/Infinite 普通 modifier 会进入 aggregator 影响 current value；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3065`、`:3907`、`:4347`。
+- 常见错误是把一次性伤害做成持续 aggregator modifier，或把持续移速 buff 做成 periodic execution；这是开发实践推断。
+
+## Damage meta attribute 和 ExecutionCalculation 输出职责混淆
+
+- ExecutionCalculation 可以输出任意 `FGameplayModifierEvaluatedData`，AttributeSet 的 `PostGameplayEffectExecute` 会在执行后收到 callback data；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectExecutionCalculation.cpp:361`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3946`。
+- Damage 是否作为 meta attribute 不是 GAS 固定类型，是项目实践；本轮源码未发现固定 `Damage` attribute 类型，未确认。
+
+## Aggregator op 顺序理解错误
+
+- 聚合公式是 `((BaseValue + AddBase) * MultiplyAdditive / DivideAdditive * MultiplyCompound) + AddFinal`，Override 优先返回 override magnitude；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:116`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectAggregator.cpp:78`、`:98`。
+- 旧名 `Additive/Multiplicitive/Division` 仍作为隐藏兼容枚举存在；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:143`、`:144`、`:145`。
+
+## Override modifier 和 Additive modifier 叠加结果不符合预期
+
+- `FAggregatorModChannel::EvaluateWithBase` 先检查 qualified Override，命中就直接返回 override magnitude，不再继续加算其他 op；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectAggregator.cpp:76`、`:78`。
+- 开发实践推断：如果需要“覆盖后再加成”，应拆分设计或确认 evaluation channel 顺序，而不是期待同一 channel 中 Override 后继续加 Additive。
+
+## Captured tags 没更新导致计算结果不符合预期
+
+- AttributeBased 和 aggregator qualification 使用 captured source/target tags 或 tag filters；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:983`、`:984`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectAggregator.cpp:28`。
+- `CapturedSourceTags` / `CapturedTargetTags` 标记 `NotReplicated`，source tags 在 spec source capture 时 recapture，target tags 在 execute/apply 路径刷新；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:1200`、`:1204`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1776`、`:3081`。
+
+## 编辑器配置了 CustomCalculationClass 但没有正确 capture 需要的属性
+
+- `FGameplayEffectModifierMagnitude::GetAttributeCaptureDefinitions` 会从 MMC CDO 的 `GetAttributeCaptureDefinitions` 收集捕获需求；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1217`、`:1230`。
+- Editor details 会根据 execution CDO 的 valid captures 显示 scoped modifiers，但运行时仍以 capture 是否有效为准；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayEffectExecutionDefinitionDetails.cpp:91`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1125`。

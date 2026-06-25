@@ -1142,3 +1142,103 @@ Spec.Def->OnApplied(ASC.ActiveGameplayEffects, SpecCopy, PredictionKey);
 - Duration / Infinite / predicted Instant 会进入 ActiveGE 容器，进而触发 `OnAddedToActiveContainer`；non-predicted Instant 走 `ExecuteGameplayEffect`，进而触发 `OnExecuted`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:862`、`:876`、`:950`、`:953`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4305`、`:3224`。
 - `OnApplied` 发生在 ActiveGE 添加或 Instant execute 之后，不因 periodic execute 或复制触发；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:956`、`:957`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponent.h:63`、`:64`。
 - ActiveGE 移除没有基类统一 `OnActiveGameplayEffectRemoved` hook；需要清理的组件通过 `ActiveGE.EventSet.OnEffectRemoved` 自行绑定 delegate；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/AbilitiesGameplayEffectComponent.cpp:151`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/AdditionalEffectsGameplayEffectComponent.cpp:13`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/TargetTagRequirementsGameplayEffectComponent.cpp:96`。
+---
+
+# 数值计算与 Attribute Capture 调用链（第十四轮）
+
+完整专题见 `calculations-captures.md`。本节只保存最常用的流程图。
+
+## 1. ExecutionCalculation 执行链
+
+```mermaid
+flowchart TD
+    A["UAbilitySystemComponent::ApplyGameplayEffectSpecToSelf"] --> B["UAbilitySystemComponent::ExecuteGameplayEffect"]
+    B --> C["FActiveGameplayEffectsContainer::ExecuteActiveEffectsFrom"]
+    C --> D["Spec.CalculateModifierMagnitudes"]
+    D --> E["普通 Modifiers -> InternalExecuteMod"]
+    D --> F["Def->Executions"]
+    F --> G["FGameplayEffectCustomExecutionParameters"]
+    G --> H["UGameplayEffectExecutionCalculation::Execute"]
+    H --> I["FGameplayEffectCustomExecutionOutput::OutputModifiers"]
+    I --> J["InternalExecuteMod"]
+    J --> K["AttributeSet::PreGameplayEffectExecute"]
+    K --> L["ApplyModToAttribute / SetAttributeBaseValue"]
+    L --> M["AttributeSet::PostGameplayEffectExecute"]
+```
+
+关键源码：
+
+- `ApplyGameplayEffectSpecToSelf` 在非预测 instant 路径调用 `ExecuteGameplayEffect`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:798`、`:953`、`:1000`。
+- `ExecuteGameplayEffect` 调 `ActiveGameplayEffects.ExecuteActiveEffectsFrom`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1022`。
+- `ExecuteActiveEffectsFrom` 遍历 `Def->Executions`，构造 `FGameplayEffectCustomExecutionParameters` 并调用 calculation CDO 的 `Execute`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3065`、`:3127`、`:3136`。
+- Execution 输出的 modifiers 会逐个进入 `InternalExecuteMod`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3146`、`:3155`。
+- `InternalExecuteMod` 负责 AttributeSet Pre/Post 回调和属性 base 修改；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3907`、`:3925`、`:3933`、`:3946`。
+
+简化伪代码：
+
+```cpp
+ExecuteActiveEffectsFrom(Spec)
+{
+    Spec.CapturedTargetTags = OwnerTags;
+    Spec.CalculateModifierMagnitudes();
+
+    for (Modifier)
+        InternalExecuteMod(Spec, EvaluatedData);
+
+    for (Execution)
+    {
+        Params = FGameplayEffectCustomExecutionParameters(...);
+        Output = {};
+        ExecCDO->Execute(Params, Output);
+        for (OutMod in Output.OutputModifiers)
+            InternalExecuteMod(Spec, OutMod);
+    }
+}
+```
+
+## 2. MMC / Modifier Magnitude 计算链
+
+```mermaid
+flowchart TD
+    A["FGameplayEffectSpec::CalculateModifierMagnitudes"] --> B["FGameplayEffectModifierMagnitude::AttemptCalculateMagnitude"]
+    B --> C{"MagnitudeCalculationType"}
+    C -->|"ScalableFloat"| D["FScalableFloat::GetValueAtLevel"]
+    C -->|"AttributeBased"| E["FAttributeBasedFloat::CalculateMagnitude"]
+    C -->|"CustomCalculationClass"| F["UGameplayModMagnitudeCalculation::CalculateBaseMagnitude"]
+    C -->|"SetByCaller"| G["Spec.GetSetByCallerMagnitude"]
+    D --> H["FModifierSpec.EvaluatedMagnitude"]
+    E --> H
+    F --> H
+    G --> H
+```
+
+关键源码：
+
+- `CalculateModifierMagnitudes` 遍历 spec modifiers 并写入 `FModifierSpec::EvaluatedMagnitude`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1948`、`:1955`。
+- `AttemptCalculateMagnitude` 根据 ScalableFloat、AttributeBased、CustomCalculationClass、SetByCaller 分支计算；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1136`、`:1147`、`:1153`、`:1159`、`:1163`。
+- MMC 的 `CalculateBaseMagnitude` 默认返回 0，业务子类通常重写；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayModMagnitudeCalculation.cpp:14`。
+
+## 3. Attribute Capture 与 Aggregator 链
+
+```mermaid
+flowchart TD
+    A["Spec.SetupAttributeCaptureDefinitions"] --> B["CapturedRelevantAttributes.AddCaptureDefinition"]
+    B --> C["Spec.CaptureDataFromSource"]
+    B --> D["Spec.CaptureAttributeDataFromTarget"]
+    C --> E["ASC::CaptureAttributeForGameplayEffect"]
+    D --> E
+    E --> F["FindOrCreateAttributeAggregator"]
+    F --> G{"CaptureDef.bSnapshot"}
+    G -->|"true"| H["TakeSnapshotOf"]
+    G -->|"false"| I["保存 Aggregator 引用"]
+    I --> J["RegisterLinkedAggregatorCallbacks"]
+    J --> K["Aggregator dirty"]
+    K --> L["ASC::OnMagnitudeDependencyChange"]
+```
+
+关键源码：
+
+- spec setup 会收集 duration、modifiers、executions 的 capture definitions；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1700`、`:1705`、`:1725`、`:1736`。
+- Source capture 来自 `EffectContext.GetInstigatorAbilitySystemComponent()`，Target capture 来自目标 ASC；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1764`、`:1748`。
+- `CaptureAttributeForGameplayEffect` 根据 `bSnapshot` 决定快照还是引用 aggregator；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3751`、`:3756`、`:3760`。
+- Non-Snapshot capture 注册 dependent，aggregator dirty 后通知 ASC 重新计算依赖它的 ActiveGE；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2389`、`:3368`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectAggregator.cpp:614`。

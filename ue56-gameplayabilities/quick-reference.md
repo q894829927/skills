@@ -504,3 +504,43 @@ AttributeSet：属性承载和属性回调
 ```
 
 开发实践推断：GEComponent 是 GE 资产单例子对象，不要在里面保存 per-target/per-application 状态；源码依据：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectComponent.h:23`、`:24`。
+---
+
+## 16. GAS 数值计算速查
+
+一句话记忆：
+
+```text
+ModifierMagnitude = 算一个数
+MMC = 自定义算一个数
+ExecutionCalculation = 复杂结算并输出一个或多个属性修改
+Attribute Capture = 把 Source/Target 属性带进计算
+Aggregator = 持续效果的当前值计算器
+```
+
+| 玩法需求 | 推荐入口 | 注意点 |
+|---|---|---|
+| 固定数值 buff/debuff | ScalableFloat Modifier | `FScalableFloat` 按 `Value * Curve[Level]` 求值；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/ScalableFloat.h:12`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1147` |
+| 随技能/GE level 成长 | ScalableFloat 或 AttributeBased 的 coefficient/pre/post | GE spec level 会传给 scalable float；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1009`、`:1076` |
+| 运行时传入数值 | SetByCaller | 先写 spec 的 Name/Tag magnitude，再应用 GE；缺失时可 log error 并返回默认值；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2200`、`:2208`、`:2216`、`:2238` |
+| 依赖一个属性算一个 modifier | AttributeBased Modifier | 需要正确配置 source/target capture 和 snapshot；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:966`、`:983` |
+| 依赖多个属性但只返回一个数 | MMC | MMC `CalculateBaseMagnitude` 返回单个 float；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayModMagnitudeCalculation.h:29` |
+| 依赖多个属性并输出多个属性修改 | ExecutionCalculation | 输出 `TArray<FGameplayModifierEvaluatedData>`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectExecutionCalculation.h:242`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3146` |
+| Damage -> Health | ExecutionCalculation + AttributeSet 回调 | 开发实践推断：复杂伤害结算放 Execution，最终属性变化进入 `Pre/PostGameplayEffectExecute`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3136`、`:3907`、`:3946` |
+| 治疗 | 简单治疗用 Modifier，复杂治疗用 Execution | 两者最终都可进入 `InternalExecuteMod`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3114`、`:3155` |
+| DOT / HOT | Periodic GE execute 路径 | Periodic/Instant 执行 modifiers 会直接改 base，并触发 AttributeSet GE execute 回调；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3065`、`:3907` |
+| 冷却缩减、移速、攻速等持续属性 | Duration/Infinite GE + Aggregator Modifier | ActiveGE modifier 写入 attribute aggregator，dirty 后重算 current value；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4347`、`:4350`、`:3263` |
+| 暴击、随机、时间相关 | 服务端决定后 SetByCaller，或服务端权威 Execution | 开发实践推断：预测路径会客户端先执行，非确定性逻辑容易与服务器不一致；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2924`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:862` |
+| Snapshot 攻击力 | Source Attribute Capture + Snapshot | Snapshot 会复制当前 aggregator；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3756` |
+| 实时防御力 | Target Attribute Capture + Non-Snapshot | Non-Snapshot 保存 aggregator 引用并可注册依赖重算；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3760`、`:4196` |
+
+排查清单：
+
+| 问题 | 优先检查 |
+|---|---|
+| MMC 算出来是 0 | 是否重写 `CalculateBaseMagnitude`，是否声明/捕获了需要的 attributes；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayModMagnitudeCalculation.cpp:14`、`:30` |
+| SetByCaller 为 0 或报错 | Spec 是否调用 `SetSetByCallerMagnitude`，key 是 Name 还是 GameplayTag；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2200`、`:2208`、`:2216` |
+| AttributeBased 不更新 | Capture 是否是 Snapshot；Non-Snapshot 才会 linked aggregator callback；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2389`、`:2411` |
+| Duration buff 数值叠加不对 | 查 `EGameplayModOp` 公式和 evaluation channel；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:116`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectAggregator.cpp:76` |
+| Execution 没触发 Cue 或 conditional GE | 是否调用 `MarkGameplayCuesHandledManually` / `MarkConditionalGameplayEffectsToTrigger`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectExecutionCalculation.cpp:346`、`:351` |
+| 预测下数值闪回 | predicted GE / predictive mods 会先本地执行再由服务器纠正；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:862`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4265` |

@@ -546,3 +546,75 @@
 
 - 本 Skill 的工作边界要求只读分析 UE 源码，只更新 `.codex/skills/ue56-gameplayabilities/` 下文档；源码路径记录于 `SKILL.md` 的工作边界。
 - 如果需要修复项目蓝图节点或 editor 扩展，开发实践推断应在项目/插件侧实现并引用运行时接口，避免直接修改 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor`；源码依据是 editor module 已有清晰模块边界；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/GameplayAbilitiesEditor.Build.cs:20`。
+
+# 常见坑：GameplayAbilityTargetActor / TargetData / Targeting 体系（第十一轮）
+
+## WaitTargetData 创建了 TargetActor 但没有正确 Confirm / Cancel
+
+- `UserConfirmed` 模式会在 `FinalizeTargetActor` 中绑定 Confirm / Cancel 输入，`Instant` 会立即确认，`Custom` / `CustomMulti` 不会自动绑定；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:167`、`:171`、`:174`。
+- ASC 的 confirm/cancel 输入最终广播 `GenericLocalConfirmCallbacks` / `GenericLocalCancelCallbacks`，如果输入未绑定或 TargetActor 没绑定，Task 会一直等；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:2931`、`:2935`、`:2938`、`:2942`。
+
+## 客户端 TargetData 生成了但服务端没有收到
+
+- 预测客户端 only 在 `OnTargetDataReadyCallback` 里发送 TargetData；发送前会创建 `FScopedPredictionWindow`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:272`、`:280`、`:283`、`:288`。
+- 服务端必须按相同 AbilitySpecHandle + ActivationPredictionKey 绑定 `AbilityTargetDataSetDelegate`，否则只能依赖缓存补触发；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:207`、`:208`、`:211`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4028`。
+
+## TargetData RPC 没有正确 PredictionKey
+
+- `AbilityTargetDataMap` 的 key 是 `FGameplayAbilitySpecHandleAndPredictionKey`，只比较 AbilityHandle 和 PredictionKey 当前值；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTypes.h:500`、`:510`、`:516`。
+- `CallServerSetReplicatedTargetData` 在 batch scope 内发现 prediction key invalid 会 warning；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4234`、`:4237`。
+
+## 服务端收到 TargetData 后没有 Consume，导致重复触发
+
+- WaitTargetData 的服务端 replicated callback 会先调用 `ConsumeClientReplicatedTargetData`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:222`、`:228`。
+- `ConsumeClientReplicatedTargetData` 会 clear TargetData 并重置 confirmed/cancelled 标记；如果自定义流程不消费，后续 `CallReplicatedTargetDataDelegatesIfSet` 可能再次广播缓存；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3838`、`:3843`、`:3844`、`:4028`。
+
+## CustomMulti 模式下误以为任务会自动结束
+
+- WaitTargetData 在 replicated 和 local ready 回调里都只在 `ConfirmationType != CustomMulti` 时 `EndTask`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:255`、`:302`。
+- 开发实践推断：CustomMulti 必须由 Ability 或外部逻辑显式结束 Task，否则 Ability 可能长期 active。
+
+## TargetActor 持有对象引用但 EndTask 后没有清理
+
+- WaitTargetData `OnDestroy` 会 destroy TargetActor；TargetActor `EndPlay` 会解绑 GenericLocalConfirm / Cancel callbacks，源码注释说明这些绑定会抑制其他 ability 使用相同按键；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:358`、`:362`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbilityTargetActor.cpp:26`、`:30`、`:40`、`:41`。
+- 自定义 TargetActor 若额外绑定外部 delegate、timer、UI、reticle，需要在 EndPlay / Task OnDestroy 中清理；这是开发实践推断，源码依据是内置类主动清理 confirm/cancel 与 reticle；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbilityTargetActor_Trace.cpp:27`、`:31`。
+
+## TargetDataHandle 为空仍继续应用 GE
+
+- `FGameplayAbilityTargetDataHandle` 可以为空，`Num` / `IsValid` 是检查入口；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h:220`、`:226`。
+- 蓝图库提供 `GetDataCountFromTargetData` 与 `TargetDataHasActor/HitResult/Origin/EndPoint`，读取前应先检查；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemBlueprintLibrary.h:230`、`:275`、`:279`、`:287`、`:295`。
+
+## 从 TargetData 读取 Actor / HitResult 前没有检查类型
+
+- `GetHitResultFromTargetData` 在没有 HitResult 时返回默认 `FHitResult`，`GetActorsFromTargetData` index 无效时返回空数组；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemBlueprintLibrary.cpp:532`、`:548`、`:618`、`:633`。
+- `ActorArray`、`SingleTargetHit`、`LocationInfo` 支持的数据不同，应先用 `TargetDataHas*` 判断；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h:448`、`:550`、`:380`。
+
+## HitResult 没写入 EffectContext，导致 GameplayCue 没有正确位置
+
+- `AddTargetDataToContext` 只有当 TargetData `HasHitResult()` 且 context 还没有 HitResult 时才写入；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTargetTypes.cpp:65`、`:67`。
+- `FGameplayEffectContext::AddHitResult` 会把 HitResult 保存到 context，并在没有 world origin 时用 `TraceStart` 设置 origin；CueParameters 会保存 EffectContext；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectTypes.cpp:221`、`:230`、`:233`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:420`、`:425`。
+
+## Trace 起点 / 终点基于客户端相机，服务端校验不足
+
+- Trace 起点来自 `StartLocation`，终点由 PlayerController view point + MaxRange 计算；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbilityTargetActor_SingleLineTrace.cpp:30`、`:32`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbilityTargetActor_Trace.cpp:90`、`:95`、`:98`、`:131`。
+- 服务端 RPC validate 只检查 TargetData item 是否有效，不检查距离、视线、遮挡或阵营；这些需要项目级服务端校验，开发实践推断；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3971`、`:3974`。
+
+## Radius TargetActor 直接信任客户端范围结果
+
+- `AGameplayAbilityTargetActor_Radius` 构造时设置 `ShouldProduceTargetDataOnServer = true`，说明默认倾向服务端生成范围结果；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbilityTargetActor_Radius.cpp:20`、`:25`。
+- 开发实践推断：范围目标选择不要直接信任客户端 ActorArray，服务端应重算 overlap 或至少二次过滤；源码依据是 WaitTargetData 支持服务端生成 TargetData 的路径；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:285`、`:290`。
+
+## TargetActor 中写了过多伤害 / 结算逻辑
+
+- TargetData 基类职责是产生和消费目标数据；GE 应用由 `ApplyGameplayEffectSpec` 和 ASC 完成；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h:46`、`:60`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTargetTypes.cpp:21`、`:47`。
+- 开发实践推断：TargetActor 应偏目标选择和轻量校验，伤害/治疗/资源消耗应交给 Ability + GameplayEffect，避免选目标层和结算层耦合。
+
+## VisualizeTargeting 被误用成真正选目标逻辑
+
+- `UAbilityTask_VisualizeTargeting` 只有 `TimeElapsed` delegate，没有 `ValidData` / `Cancelled` TargetData 输出；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask_VisualizeTargeting.h:21`、`:26`、`:30`。
+- 它的用途是生成/使用 TargetActor 做 visualization，时间到后广播并 EndTask；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_VisualizeTargeting.cpp:143`、`:153`、`:168`、`:174`。
+
+## RPC batch 打开后误判 TargetData 调用顺序
+
+- `CallServerSetReplicatedTargetData` 在 batch scope 内可能只写入 `ExistingBatchData->TargetData`；没有 batch 或 batch 未 started 时才直接调用 `ServerSetReplicatedTargetData`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4217`、`:4223`、`:4230`、`:4241`、`:4245`。
+- 调试时看到客户端调用了 TargetData 发送函数，不代表独立 RPC 已立即发出；这是源码批处理路径确认的行为；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4222`。

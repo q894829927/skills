@@ -896,3 +896,86 @@ flowchart TD
 - 当前工作树未确认存在 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesBlueprintEditor` 独立目录。
 - 请求中的 `UGameplayAbilityBlueprintFactory`、`FGameplayAbilityGraphPanelNodeFactory`、`FGameplayTagRequirementsDetails`、`FAbilityAudit`、`FAssetTypeActions_GameplayAbilityBlueprint`、`FAssetTypeActions_GameplayEffect`、`FAssetTypeActions_GameplayCueNotify` 未确认存在；源码确认了名称相近或替代类型，详见 `editor-blueprint.md`。
 - GameplayEffectComponents 在编辑器 details 中的专门定制未确认；本轮只确认 `UGameplayEffect` 运行时存在 `GEComponents` 属性；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2421`。
+
+# GameplayAbilityTargetActor / TargetData 调用链（第十一轮）
+
+完整专题见 `targeting-targetdata.md`。本节聚焦 TargetActor 生成、确认/取消、TargetData RPC 和 TargetData 到 GE / Cue 的主链。
+
+## TargetActor 生命周期
+
+```mermaid
+flowchart TD
+    A["Ability 调用 WaitTargetData"] --> B["NewAbilityTask"]
+    B --> C{"TargetClass 或已有 TargetActor"}
+    C -->|TargetClass| D["BeginSpawningActor"]
+    D --> E["SpawnActorDeferred"]
+    E --> F["InitializeTargetActor"]
+    C -->|已有 TargetActor| F
+    F --> G["绑定 TargetDataReadyDelegate / CanceledDelegate"]
+    G --> H["FinishSpawningActor / FinalizeTargetActor"]
+    H --> I["ASC.SpawnedTargetActors.Push"]
+    I --> J["TargetActor.StartTargeting"]
+    J --> K{"ConfirmationType"}
+    K -->|Instant| L["ConfirmTargeting"]
+    K -->|UserConfirmed| M["BindToConfirmCancelInputs"]
+    K -->|Custom/CustomMulti| N["外部或 TargetActor 自行触发"]
+    L --> O["OnTargetDataReadyCallback"]
+    M --> O
+    N --> O
+    O --> P["ValidData / Cancelled"]
+    P --> Q["EndTask 或 CustomMulti 持续"]
+```
+
+- `WaitTargetData` 保存 `TargetClass`，`WaitTargetDataUsingActor` 保存已有 TargetActor；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:16`、`:19`、`:25`、`:29`。
+- `InitializeTargetActor` 设置 `PrimaryPC` 并绑定 ready/cancel delegate；`FinalizeTargetActor` 将 actor push 到 ASC，调用 `StartTargeting` 并处理 `Instant` / `UserConfirmed`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:137`、`:142`、`:145`、`:149`、`:157`、`:160`、`:167`、`:174`。
+- TargetActor `ConfirmTargeting` 会调用 `ConfirmTargetingAndContinue`，并在 `bDestroyOnConfirmation` 为 true 时 destroy；`CancelTargeting` 广播 cancel 并 destroy；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbilityTargetActor.cpp:83`、`:98`、`:99`、`:101`、`:107`、`:120`、`:121`。
+
+## TargetData 网络复制链
+
+```mermaid
+flowchart TD
+    A["客户端 TargetActor 生成 TargetData"] --> B["WaitTargetData::OnTargetDataReadyCallback"]
+    B --> C["FScopedPredictionWindow"]
+    C --> D["ASC::CallServerSetReplicatedTargetData"]
+    D --> E{"Server Ability RPC Batch?"}
+    E -->|是| F["写入 Batch.TargetData"]
+    E -->|否| G["ServerSetReplicatedTargetData RPC"]
+    F --> G
+    G --> H["AbilityTargetDataMap.FindOrAdd"]
+    H --> I["保存 TargetData / ApplicationTag / PredictionKey"]
+    I --> J["TargetSetDelegate.Broadcast"]
+    J --> K["服务端 WaitTargetData 回调"]
+    K --> L["ConsumeClientReplicatedTargetData"]
+    L --> M["TargetActor::OnReplicatedTargetDataReceived"]
+    M --> N["ValidData 或 Cancelled"]
+```
+
+- 本地 TargetData ready 时，预测客户端用 `FScopedPredictionWindow` 包住发送，调用 `CallServerSetReplicatedTargetData`；若 TargetActor 可服务端生成数据，UserConfirmed 只发 generic confirm；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:280`、`:283`、`:288`、`:290`、`:293`。
+- 服务端 `ServerSetReplicatedTargetData` 按 AbilityHandle + PredictionKey 写入 `AbilityTargetDataMap`，再广播 `TargetSetDelegate`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3945`、`:3950`、`:3962`、`:3968`。
+- 服务端 Task 会先 `ConsumeClientReplicatedTargetData`，然后调用 TargetActor 的 `OnReplicatedTargetDataReceived` 做校验/替换；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:222`、`:228`、`:231`、`:240`。
+- `CallReplicatedTargetDataDelegatesIfSet` 用于处理数据先到、服务端 delegate 后绑定的情况；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4028`、`:4031`、`:4037`、`:4039`。
+- RPC batch 会让 `CallServerSetReplicatedTargetData` 只写入 batch 的 `TargetData`，不一定立即发独立 RPC；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4217`、`:4223`、`:4241`、`:4245`。
+
+## TargetData 到 GE / GameplayCue 链
+
+```mermaid
+flowchart TD
+    A["WaitTargetData ValidData"] --> B["Ability 读取 TargetData"]
+    B --> C["GetActors / HitResult / Origin / EndPoint"]
+    C --> D["构造或修改 GameplayEffectSpec"]
+    D --> E["TargetData::ApplyGameplayEffectSpec"]
+    E --> F["Duplicate EffectContext"]
+    F --> G["AddTargetDataToContext"]
+    G --> H["ApplyGameplayEffectSpecToTarget"]
+    H --> I["GE 触发 GameplayCue"]
+    I --> J["GameplayCueParameters.EffectContext"]
+```
+
+- TargetData 可解析 actor、hit result、origin、endpoint，蓝图库提供对应检查和读取函数；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemBlueprintLibrary.cpp:532`、`:605`、`:618`、`:651`、`:678`、`:691`。
+- `FGameplayAbilityTargetData::ApplyGameplayEffectSpec` 会逐目标查 ASC、复制 Spec/Context、将 TargetData 写入 Context，再通过 instigator ASC 应用到目标 ASC；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTargetTypes.cpp:21`、`:36`、`:41`、`:45`、`:47`。
+- `AddTargetDataToContext` 会把 ActorArray、HitResult、Origin 写入 EffectContext；Cue 参数会保存 EffectContext；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTargetTypes.cpp:54`、`:61`、`:67`、`:72`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:420`、`:425`。
+
+## 第十一轮未确认
+
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbilityTargetTypes.cpp` 未确认存在；当前源码实际路径为 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTargetTypes.cpp:1`。
+- TargetActor 子类之外的项目级服务端命中合法性校验未确认；本轮只确认 `OnReplicatedTargetDataReceived` 是内置扩展点；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor.h:64`。

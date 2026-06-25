@@ -428,3 +428,32 @@ ASC `BlockedAbilityTags` 的关系：Ability 的 `BlockAbilitiesWithTag` 通过 
 - `GameplayAbilitiesBlueprintEditor` 目录当前不存在，独立 BlueprintEditor 模块未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source`。
 - `UGameplayAbilityBlueprintFactory`、`FGameplayAbilityGraphPanelNodeFactory`、`FGameplayTagRequirementsDetails`、`FAbilityAudit`、`FAssetTypeActions_GameplayAbilityBlueprint`、`FAssetTypeActions_GameplayEffect`、`FAssetTypeActions_GameplayCueNotify` 这些请求名在当前源码未命中，未确认；实际替代类型见 `editor-blueprint.md`。
 - `UGameplayEffect` 的 `GEComponents` 是否有专门组件列表 customization，本轮未看到独立 details 类，未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffect.h:2421`、`:2422`。
+
+# 核心类：GameplayAbilityTargetActor / TargetData / Targeting（第十一轮）
+
+完整专题见 `targeting-targetdata.md`。本节只保留索引和速查，便于从 AbilityTask、网络预测、GameplayEffect、GameplayCue 快速跳到 Targeting 体系。
+
+## 类定位索引
+
+- `AGameplayAbilityTargetActor` 是 Ability targeting 辅助 Actor，由 AbilityTask 生成，用于产生或确定传递给后续逻辑的 TargetData；源码注释也提醒默认形式每次 Ability 激活都会 spawn，效率不高，多数游戏需要重写或改成项目侧实现；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor.h:19`、`:22`、`:23`。
+- `UAbilityTask_WaitTargetData` 是等待 TargetActor 返回 valid / cancel 数据的 AbilityTask，暴露 `ValidData` 与 `Cancelled` BlueprintAssignable delegate；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask_WaitTargetData.h:16`、`:28`、`:31`。
+- `FGameplayAbilityTargetDataHandle` 是 TargetData 多态容器，源码注释明确用于蓝图引用传递、多态 TargetData 和客户端/服务端按值复制；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h:179`、`:181`、`:182`、`:183`、`:192`。
+- 常用 TargetData 派生类型包括 `FGameplayAbilityTargetData_ActorArray`、`FGameplayAbilityTargetData_SingleTargetHit`、`FGameplayAbilityTargetData_LocationInfo`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h:448`、`:550`、`:380`。
+- `AGameplayAbilityTargetActor_Trace` 是 trace 类 TargetActor 中间基类，`SingleLineTrace` 和 `GroundTrace` 分别实现直线命中和地面落点；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor_Trace.h:20`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor_SingleLineTrace.h:13`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor_GroundTrace.h:17`。
+- `AGameplayAbilityTargetActor_Radius` 以 `StartLocation` 为圆心收集半径内 Pawn，并默认 `ShouldProduceTargetDataOnServer = true`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor_Radius.h:15`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbilityTargetActor_Radius.cpp:25`。
+- `UAbilityTask_VisualizeTargeting` 复用 TargetActor 做可视化，到时间只广播 `TimeElapsed`，没有 TargetData 输出；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask_VisualizeTargeting.h:21`、`:26`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_VisualizeTargeting.cpp:168`、`:174`。
+- TargetData RPC 由 ASC 的 `AbilityTargetDataMap` 缓存，key 是 AbilitySpecHandle + PredictionKey；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:1698`、`:1699`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTypes.h:500`、`:510`。
+
+## TargetData / TargetActor 速查
+
+- 需要玩家瞄准、点击地面、选 actor、确认/取消并把客户端结果传给服务端时，用 `WaitTargetData`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/Tasks/AbilityTask_WaitTargetData.h:46`、`:48`。
+- 目标已经由投射物、服务端逻辑、UI 或其他系统算好时，可以只用 `AbilitySystemBlueprintLibrary` 创建 TargetDataHandle；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemBlueprintLibrary.cpp:393`、`:401`、`:515`、`:380`。
+- 单目标命中点用 `SingleTargetHit`，多个 actor 用 `ActorArray`，纯位置/方向用 `LocationInfo`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetTypes.h:550`、`:448`、`:380`。
+- 直线瞄准用 `SingleLineTrace`，地面 AOE 或放置用 `GroundTrace`，范围 actor 收集用 `Radius`，放置预览用 `ActorPlacement`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor_SingleLineTrace.h:13`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor_GroundTrace.h:17`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor_Radius.h:15`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor_ActorPlacement.h:14`。
+- 客户端预测 TargetData 必查：PredictionKey、`CallServerSetReplicatedTargetData`、TargetData native NetSerialize、服务端 delegate 是否绑定、是否 consume；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:280`、`:288`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTargetTypes.cpp:183`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3838`。
+- 服务端校验 TargetData：ASC RPC validate 只检查 TargetData item 是否有效，项目级距离、视线、阵营、碰撞等合法性应在 `OnReplicatedTargetDataReceived` 或服务端 Ability 逻辑中做；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3971`、`:3974`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor.h:64`。
+
+## 第十一轮未确认项
+
+- 用户给出的 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbilityTargetTypes.cpp` 当前未确认存在；实际实现路径是 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilityTargetTypes.cpp:1`。
+- `AGameplayAbilityTargetActor_ActorPlacement` 的 `PlacedActorClass` 注释写 replication purpose not implemented yet，因此其放置 Actor 复制支持未确认；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/Abilities/GameplayAbilityTargetActor_ActorPlacement.h:25`。

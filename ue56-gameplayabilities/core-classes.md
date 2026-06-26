@@ -1,3 +1,27 @@
+# 调试与排错核心入口（第十六轮）
+
+完整专题见 `debugging-logging.md`。本节只保留核心类型和入口索引。
+
+| 类型 / 入口 | 定位 | 源码路径 |
+|---|---|---|
+| `ABILITY_LOG` | GAS 运行时日志宏，输出到 `LogAbilitySystem` | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemLog.h:24`、`:39` |
+| `LogAbilitySystem` / `VLogAbilitySystem` / `LogGameplayEffects` | GAS 主要日志类别 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemLog.h:14`、`:15`、`:16`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemLog.cpp:4`、`:5`、`:6` |
+| `FAbilitySystemComponentDebugInfo` | ASC `DisplayDebug` / `PrintDebug` 使用的 debug 上下文 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:1238`、`:1264` |
+| `UAbilitySystemComponent::DisplayDebug` | `showdebug abilitysystem` 进入 ASC 状态显示的核心入口 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:2359`、`:2392` |
+| `UAbilitySystemComponent::PrintDebug` | 收集客户端/服务端 ASC debug string，用于日志和远端排错 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:2412`、`:2447` |
+| `UAbilitySystemComponent::GrabDebugSnapshot` | VisualLogger 快照入口，记录 ability 与 ActiveGE | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1905`、`:1915` |
+| `FGameplayDebuggerCategory_Abilities` | GameplayDebugger 的 GAS 分类，比较 Tags / Abilities / Effects / Attributes | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayDebuggerCategory_Abilities.cpp:44`、`:57`、`:146` |
+| `AAbilitySystemDebugHUD` | Basic HUD 调试 Actor，提供 tag / attribute / blocked ability tag HUD 扩展 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemDebugHUD.h:134`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemDebugHUD.cpp:607` |
+| `UAbilitySystemCheatManagerExtension` | CheatManager 调试命令扩展，提供 Grant / Activate / Cancel / GE Apply / Remove 等命令 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemCheatManagerExtension.cpp:579`、`:611`、`:673` |
+| `LogPredictionKey` | PredictionKey 专用日志类别 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayPrediction.cpp:10` |
+
+调试判断：
+
+- Ability 激活失败先查 `TryActivateAbility` / `InternalTryActivateAbility` 的返回路径和 `NotifyAbilityFailed`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1583`、`:1683`、`:2531`。
+- GE 没生效先查 `ApplyGameplayEffectSpecToSelf` 的 authority/prediction/application query/GEComponent `CanApply` 路径；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:812`、`:833`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:881`。
+- Tag / GE / Attribute 客户端不一致优先用 GameplayDebugger 对比 server/local；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayDebuggerCategory_Abilities.cpp:391`、`:504`、`:688`。
+- `ABILITY_LOG_SCOPE`、`AbilitySystemCVars.h`、`AbilitySystem.Log` 同名 CVar 本轮未确认。
+
 # 核心类：UAbilitySystemComponent（第二轮）
 
 本轮重点阅读：

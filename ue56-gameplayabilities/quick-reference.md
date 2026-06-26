@@ -2,6 +2,43 @@
 
 > 适用范围：基于当前 `ue56-gameplayabilities` Skill 知识库整理，用于快速判断“什么时候用哪个 GAS 类 / 函数 / 配置”。默认只面向项目侧开发，不修改 `Engine/` 源码。
 
+## 18. GAS Debug / 排错速查
+
+详细专题见 `debugging-logging.md`。一句话记忆：
+
+```text
+ABILITY_LOG 看运行时判断
+showdebug abilitysystem 看当前 ASC 状态
+GameplayDebugger 看 server/local 差异
+PrintDebug 看客户端和服务端两边的 ASC 快照
+VisualLogger 看时间线上 Ability/GE/Task 发生了什么
+```
+
+| 问题 | 优先入口 | 源码路径 |
+|---|---|---|
+| Ability 放不出来 | `TryActivateAbility` / `InternalTryActivateAbility` 日志、`AbilityFailedCallbacks`、failure tags | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1583`、`:1683`、`:2531` |
+| CanActivate 失败原因不清楚 | 开启 `LogAbilitySystem` Verbose/VeryVerbose，或借助 CheatManager `AbilitySystem.Ability.Activate` 的日志收集路径 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:475`、`:485`、`:495`、`:505`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemCheatManagerExtension.cpp:319` |
+| 想看 ASC 当前状态 | `showdebug abilitysystem` / `AbilitySystem.Debug.NextCategory` / `AbilitySystem.Debug.SetCategory` | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilitiesModule.cpp:73`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:2317`、`:2323`、`:2359` |
+| 想比较服务端和客户端差异 | GameplayDebugger `Abilities` 分类 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilitiesModule.cpp:75`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayDebuggerCategory_Abilities.cpp:391`、`:504`、`:688` |
+| GE 没应用 | 查 authority/prediction、application queries、GEComponents `CanApply`、modifier attribute | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:812`、`:833`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:881`、`:3967` |
+| Attribute 数值不对 | `showdebug abilitysystem` Attributes 分类、GameplayDebugger Attributes、Aggregator warning | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:2570`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayDebuggerCategory_Abilities.cpp:688`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectAggregator.cpp:94` |
+| GameplayCue 不播放 | `AbilitySystem.DisplayGameplayCues`、`AbilitySystem.DisableGameplayCues`、Cue notify spawn log | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:41`、`:44`、`:217`、`:534` |
+| TargetData/RPC 没到服务端 | `AbilitySystem.ServerRPCBatching.Log`、`ServerSetReplicatedTargetData`、`ConsumeClientReplicatedTargetData` | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4098`、`:3945`、`:3838` |
+| 预测失败或回滚异常 | `LogPredictionKey`、`ClientActivateAbilityFailed`、PredictionKey stale/dependency CVars | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayPrediction.cpp:10`、`:18`、`:31`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:2251` |
+| Cue / Tag / GE 在客户端不一致 | GameplayDebugger server/local 对比、ASC replication mode、Minimal tags/cues | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayDebuggerCategory_Abilities.cpp:391`、`:504`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1626` |
+
+常用调试 CVar / Command：
+
+| 名称 | 用途 | 源码路径 |
+|---|---|---|
+| `AbilitySystem.IgnoreCooldowns` / `AbilitySystem.IgnoreCosts` | cheat，临时忽略 cooldown/cost | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:40`、`:41` |
+| `AbilitySystem.GlobalAbilityScale` | cheat，非 shipping 迭代用全局缩放 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:43` |
+| `AbilitySystem.DebugBasicHUD` / `AbilitySystem.DebugAbilityTags` / `AbilitySystem.DebugAttribute` | Basic HUD 调试开关 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemDebugHUD.cpp:607`、`:615`、`:622` |
+| `AbilitySystem.Ability.Grant` / `.Activate` / `.Cancel` | CheatManager Ability 调试命令 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemCheatManagerExtension.cpp:579`、`:611`、`:595` |
+| `AbilitySystem.Effect.ListActive` / `.Apply` / `.Remove` | CheatManager GE 调试命令 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemCheatManagerExtension.cpp:640`、`:673`、`:646` |
+
+未确认：`ABILITY_LOG_SCOPE`、`AbilitySystemCVars.h`、`AbilitySystem.Log` 同名 CVar 本轮未在指定源码范围内确认。
+
 ## 0. 一句话总览
 
 ```text

@@ -55,3 +55,11 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 - `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemLog.cpp`
 - `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h`
 - `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp`
+
+## 第十六轮补充
+
+- `debugging-logging.md`：第十六轮 GAS Debug / Log / VisualLogger / Console Variables / 调试排错专题，覆盖 `ABILITY_LOG`、LogCategory、ASC `DisplayDebug` / `PrintDebug`、VisualLogger、GameplayDebugger、Basic HUD、CheatManager 调试命令、GameplayCue / Prediction / ServerRPCBatching 相关 CVar、Ability 激活失败和 GE/Attribute/Cue/TargetData 排错清单。
+
+优先分析顺序补充：如果用户问题表现为“技能放不出来、GE 没生效、Tag/Cue/Attribute 客户端不一致、TargetData/RPC 没到服务端、预测失败不知道原因”，先查 `debugging-logging.md`，再回到对应专题源码复核。
+
+下一轮推荐入口：GAS 性能 / Stats / Profiling 专题，可从 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemStats.h` 和相关 `DECLARE_CYCLE_STAT` / `SCOPE_CYCLE_COUNTER` 调用点开始。

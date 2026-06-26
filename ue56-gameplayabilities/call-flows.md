@@ -1,3 +1,81 @@
+# GAS Debug 调用链（第十六轮）
+
+完整专题见 `debugging-logging.md`。本节记录最常用的排错链路。
+
+## 1. showdebug abilitysystem 链
+
+```mermaid
+flowchart TD
+    A["Console: showdebug abilitysystem"] --> B["AHUD::OnShowDebugInfo"]
+    B --> C["UAbilitySystemComponent::OnShowDebugInfo"]
+    C --> D["选择 DebugTarget / HUD DebugTarget"]
+    D --> E["UAbilitySystemComponent::DisplayDebug"]
+    E --> F["FAbilitySystemComponentDebugInfo"]
+    F --> G["Debug_Internal"]
+    G --> H["Owned Tags / BlockedAbilityTags"]
+    G --> I["Attributes + Aggregators"]
+    G --> J["ActiveGameplayEffects"]
+    G --> K["Abilities + ActiveTasks"]
+```
+
+- GameplayAbilities 模块在启动时把 `OnShowDebugInfo` 注册到 HUD debug 链；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilitiesModule.cpp:73`、`:84`。
+- `OnShowDebugInfo` 根据 `AbilitySystem` showdebug 标志和 debug target 找 ASC；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:2329`、`:2355`。
+- `DisplayDebug` 设置 Attributes / Ability / GameplayEffects 分类后调用 `Debug_Internal`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:2359`、`:2392`。
+- `Debug_Internal` 输出 tags、blocked tags、attributes、active GE、abilities、active tasks；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:2450`、`:2500`、`:2570`、`:2655`、`:2760`。
+
+## 2. PrintDebug 客户端/服务端链
+
+```mermaid
+flowchart TD
+    A["ASC::PrintDebug"] --> B["本地 Debug_Internal"]
+    B --> C{"HasAuthority?"}
+    C -->|"No"| D["ServerPrintDebug_Request 或 RequestWithStrings"]
+    D --> E["服务端 Debug_Internal"]
+    E --> F["ClientPrintDebug_Response"]
+    C -->|"Yes"| G["OnClientServerDebugAvailable"]
+```
+
+- `PrintDebug` 会打开 attributes/effects/abilities 三类并累积字符串；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:2412`、`:2447`。
+- 客户端可发送本地 debug strings 给服务端，发送由 `ShouldSendClientDebugStringsToServer` 节流；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:2396`、`:2410`、`:2092`。
+- 服务端收到请求后再次运行 `Debug_Internal` 并通过 `ClientPrintDebug_Response` 回发；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:2110`、`:2138`。
+
+## 3. Ability 激活失败排错链
+
+```mermaid
+flowchart TD
+    A["TryActivateAbility"] --> B["Handle / Spec / Ability 检查"]
+    B --> C["ActorInfo / Owner / Avatar 检查"]
+    C --> D["Role / NetExecutionPolicy 检查"]
+    D --> E["InternalTryActivateAbility"]
+    E --> F["ShouldAbilityRespondToEvent"]
+    F --> G["CanActivateAbility"]
+    G --> H["Cooldown / Cost / Tag / Input / Blueprint"]
+    H --> I{"失败?"}
+    I -->|"Yes"| J["InternalTryActivateAbilityFailureTags"]
+    J --> K["NotifyAbilityFailed / AbilityFailedCallbacks"]
+    I -->|"No"| L["CallActivateAbility"]
+```
+
+- invalid handle/Ability 会 warning，pending remove、ActorInfo 无效、simulated proxy 等路径可能直接返回 false；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1585`、`:1593`、`:1607`、`:1618`。
+- `InternalTryActivateAbility` 在网络策略、事件响应、`CanActivateAbility` 失败时写入 failure tags 并调用 `NotifyAbilityFailed`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1744`、`:1778`、`:1794`、`:1806`。
+- `CanActivateAbility` 的 cooldown/cost/tag/input/Blueprint 失败日志受 `FScopedCanActivateAbilityLogEnabler` 控制；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:475`、`:485`、`:495`、`:505`、`:516`。
+
+## 4. TargetData / RPC Debug 链
+
+```mermaid
+flowchart TD
+    A["WaitTargetData 生成 TargetData"] --> B["CallServerSetReplicatedTargetData"]
+    B --> C["ServerSetReplicatedTargetData"]
+    C --> D["AbilityTargetDataMap"]
+    D --> E["AbilityTargetDataSetDelegate"]
+    E --> F["服务端 Task 收到数据"]
+    F --> G["ConsumeClientReplicatedTargetData"]
+```
+
+- `AbilitySystem.ServerRPCBatching.Log` 可辅助观察 batched TryActivate / TargetData / EndAbility 日志顺序；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4098`、`:4134`、`:4150`。
+- `ServerSetReplicatedTargetData` 写入 `AbilityTargetDataMap`，覆盖 pending data 时会 warning；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3945`、`:3950`、`:3958`。
+- 服务端消费数据依赖 `ConsumeClientReplicatedTargetData`，未消费会增加重复触发风险；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3838`。
+
 # 调用链：Ability 激活初步分析（第二轮）
 
 本轮只做 `UAbilitySystemComponent` 到 `UGameplayAbility` 的初步激活链分析，不完整展开网络预测、target data 与 RPC batch。

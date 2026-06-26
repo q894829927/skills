@@ -1,3 +1,61 @@
+# 常见坑：GAS Debug / Log / 调试排错（第十六轮）
+
+## 以为 Ability 激活失败一定会有明显日志
+
+- `TryActivateAbility` 对 invalid handle/Ability 会 warning，但 pending remove、ActorInfo 无效、simulated proxy 等路径会直接返回 false 或少量日志；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1585`、`:1593`、`:1607`、`:1618`。
+- `CanActivateAbility` 的 cooldown/cost/tag/input/Blueprint 失败细节受 `FScopedCanActivateAbilityLogEnabler` 控制，不一定在普通日志级别直接可见；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:1794`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:475`、`:485`、`:495`、`:505`。
+- 排查时应结合 `AbilityFailedCallbacks`、failure tags、`showdebug abilitysystem` 和 `LogAbilitySystem` Verbose/VeryVerbose；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:549`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:2531`。
+
+## 把 `ABILITY_VLOG` 当作可用新接口
+
+- 当前 `ABILITY_VLOG` 宏带有 deprecated 的 `static_assert`，新排错不应依赖它；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemLog.h:29`、`:44`。
+- VisualLogger 相关应查 `UE_VLOG` / `UE_VLOG_UELOG` / `GrabDebugSnapshot` / `ABILITY_VLOG_ATTRIBUTE_GRAPH` 等实际调用点；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemLog.h:54`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:1905`。
+
+## 以为 `showdebug abilitysystem` 会自动选择正确 ASC
+
+- GameplayAbilities 侧只确认注册了 `UAbilitySystemComponent::OnShowDebugInfo` 到 HUD debug 链，目标选择还受 HUD debug target 与 `ShouldUseDebugTargetFromHud` 影响；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilitiesModule.cpp:73`、`:84`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:2329`、`:2355`。
+- 如果 ASC 放在 PlayerState 而 Avatar 是 Character，开发实践推断：必须确认 debug target 最终能找到正确 ASC，否则看到的可能是空数据或错误对象。
+
+## 忽略 GameplayDebugger 的 server/local 对比能力
+
+- `FGameplayDebuggerCategory_Abilities` 会收集并绘制 tags、abilities、effects、attributes，并能比较 server/local 数据；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayDebuggerCategory_Abilities.cpp:146`、`:391`、`:504`、`:688`。
+- 常见误区是只看客户端 UI 或只看服务端日志，导致 replication mode、Minimal tags/cues、Attribute RepNotify 的问题被漏掉；开发实践推断，源码依据为 GameplayDebugger 明确保存本地/服务端数据并绘制差异。
+
+## 用 IgnoreCooldowns / IgnoreCosts 调试后忘记恢复
+
+- `AbilitySystem.IgnoreCooldowns` 和 `AbilitySystem.IgnoreCosts` 是 cheat CVar，会让 `CheckCooldown` / `CheckCost` 逻辑被绕过；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:40`、`:41`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemGlobals.h:161`、`:164`。
+- 调试 Cost/Cooldown GE 配置时如果这些 CVar 仍开启，会掩盖 Cooldown GrantedTag、Cost Modifier、SetByCaller 缺失等配置错误；开发实践推断。
+
+## 用 GlobalAbilityScale 当正式玩法规则
+
+- `AbilitySystem.GlobalAbilityScale` 源码说明用于 testing/iteration，never for shipping；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:43`。
+- 它会被 WaitDelay、PlayMontageAndWait、RootMotion AbilityTask 等非 shipping scale 入口使用；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitDelay.cpp:19`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_PlayMontageAndWait.cpp:115`。
+
+## Cue 不播放时只查资产，不查全局 CVar
+
+- `AbilitySystem.DisableGameplayCues` 会让 `ShouldSuppressGameplayCues` 抑制 cue；`AbilitySystem.GameplayCue.RunOnDedicatedServer` 也影响 dedicated server cue 运行；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:44`、`:50`、`:179`。
+- `AbilitySystem.DisplayGameplayCues`、`AbilitySystem.LogGameplayCueActorSpawning` 和 `AbilitySystem.GameplayCueFailLoads` 是 Cue 排错入口；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:38`、`:41`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueSet.cpp:47`。
+
+## TargetData / GenericReplicatedEvent 没有 Consume
+
+- `ConsumeClientReplicatedTargetData` 和 `ConsumeGenericReplicatedEvent` 用于清理 replicated data/event 缓存；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3838`、`:3849`。
+- 未消费旧数据可能导致后续 delegate 立即命中旧事件或重复触发；这是开发实践推断，源码依据是 `CallOrAddReplicatedDelegate` 会在已有缓存事件时直接调用 delegate；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4066`。
+
+## RPC Batch 打开后误判调用顺序
+
+- `AbilitySystem.ServerRPCBatching.Log` 会打印 batch 中 TryActivateAbility、TargetData、EndAbility 等调用；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:4098`、`:4134`、`:4150`、`:4170`。
+- 常见误区是只看单个 RPC 日志而忽略 batch flush 后的顺序；开发实践推断，排查时应同时打开 batch log。
+
+## 把 Basic HUD / CheatManager 命令当作运行时业务接口
+
+- `AbilitySystemDebugHUD` 和 `AbilitySystemCheatManagerExtension` 都是调试/cheat 辅助入口；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemDebugHUD.cpp:607`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemCheatManagerExtension.cpp:579`、`:673`。
+- 开发实践推断：项目运行时代码不应依赖 CheatManager debug command 完成授予、激活、应用 GE 等正式逻辑。
+
+## 误以为本轮确认了所有 CVar
+
+- `ABILITY_LOG_SCOPE`、`AbilitySystemCVars.h`、`AbilitySystem.Log` 同名 CVar 本轮在指定 GameplayAbilities 源码范围内未确认。
+- `showdebug abilitysystem` 的控制台命令解析属于 UE 通用 showdebug/HUD 系统，本轮只确认 GameplayAbilities 侧注册和 ASC 输出链；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayAbilitiesModule.cpp:73`、`:84`。
+
 # 常见坑：UAbilitySystemComponent（第二轮）
 
 ## ASC 放在 Character 和 PlayerState 的区别

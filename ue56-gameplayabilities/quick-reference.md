@@ -544,3 +544,23 @@ Aggregator = 持续效果的当前值计算器
 | Duration buff 数值叠加不对 | 查 `EGameplayModOp` 公式和 evaluation channel；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:116`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectAggregator.cpp:76` |
 | Execution 没触发 Cue 或 conditional GE | 是否调用 `MarkGameplayCuesHandledManually` / `MarkConditionalGameplayEffectsToTrigger`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectExecutionCalculation.cpp:346`、`:351` |
 | 预测下数值闪回 | predicted GE / predictive mods 会先本地执行再由服务器纠正；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:862`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4265` |
+
+---
+
+## 17. GAS 测试与官方示例速查
+
+详细专题见 `tests-practices.md`。这些测试用于验证引擎机制，不是业务模板。
+
+| 需求 | 优先看 | 结论 |
+|---|---|---|
+| 最小测试 Pawn | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemTestPawn.h:17`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestPawn.cpp:14`、`:25` | TestPawn 持有 replicated ASC，实现 `IAbilitySystemInterface`，并在 `PostInitializeComponents` 调 `InitStats`。 |
+| 最小测试 AttributeSet | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemTestAttributeSet.h:13`、`:30`、`:36`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestAttributeSet.cpp:92` | `Mana` 用 `FGameplayAttributeData` 验证 Base/Current；`Damage` 是非持久 meta attribute 示例。 |
+| GE 应用机制 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:126`、`:166`、`:281`、`:330`、`:357` | 覆盖 Instant、Infinite、Periodic、StackLimit、SetByCaller duration。 |
+| Attribute / Aggregator | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:194`、`:222`、`:240`、`:259` | 验证 modifier op 聚合、Mana CurrentValue 改变、BaseValue 不变。 |
+| Ability 激活 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/AbilitySystemComponentTests.cpp:132`、`:157`、`:166`、`:172`、`:196` | 覆盖 GiveAbility、TryActivateAbility、CancelAbilityHandle、activation inhibited failure。 |
+| GameplayCue | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:417`、`:537`、`:679`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayCueTests.h:16` | 覆盖 direct API、GE API、replication mode 下 cue 路径；资产扫描/异步加载未覆盖。 |
+| GameplayTag count | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayTagCountContainerTests.cpp:16`、`:21`、`:38`、`:55` | 验证显式 tag count 与父 tag count 语义。 |
+| PredictionKey | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/PredictionKeyTests.cpp:15`、`:62`、`:83`、`:88`、`:432`、`:476` | 验证 dependent key、catch-up/reject delegate、`FScopedPredictionWindow`。 |
+| 当前未覆盖 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests` | TargetData、AbilityTask 生命周期、GEComponents、ExecutionCalculation/MMC/Attribute Capture、真实网络复制、Iris、ResponseTable 均未在当前 tests 中完整覆盖。 |
+
+开发实践推断：写项目侧自动化测试时，可以借鉴 `GameplayEffectTests.cpp` 的 transient GE 机制测试、`PredictionKeyTests.cpp` 的 prediction key wrapper、`GameplayTagCountContainerTests.cpp` 的 tag count 断言；不要照搬 `AbilitySystemTestAttributeSet` 的 `mutable`、禁用复制或 `#if 0` 战斗逻辑，源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemTestAttributeSet.h:15`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestAttributeSet.cpp:31`、`:121`。

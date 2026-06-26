@@ -845,3 +845,84 @@
 
 - `FGameplayEffectModifierMagnitude::GetAttributeCaptureDefinitions` 会从 MMC CDO 的 `GetAttributeCaptureDefinitions` 收集捕获需求；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1217`、`:1230`。
 - Editor details 会根据 execution CDO 的 valid captures 显示 scoped modifiers，但运行时仍以 capture 是否有效为准；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilitiesEditor/Private/GameplayEffectExecutionDefinitionDetails.cpp:91`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1125`。
+
+---
+
+# 常见坑：GAS Tests / 官方测试用例反推实践（第十五轮）
+
+## 把引擎测试类当作正式业务模板照搬
+
+- `AAbilitySystemTestPawn` 是测试 Pawn：构造 replicated ASC，并在 `PostInitializeComponents` 调 `InitStats`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestPawn.cpp:14`、`:15`、`:25`。
+- 它没有在自身初始化里处理完整项目常见的 Owner/Avatar/PlayerState/输入/网络架构；`InitAbilityActorInfo` 在 PredictionKey 测试里手动调用；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/PredictionKeyTests.cpp:465`。
+- 开发实践推断：TestPawn 可借鉴为自动化测试最小宿主，不应直接作为业务 Character 模板。
+
+## TestAttributeSet 的 Damage 写法和项目战斗系统边界混淆
+
+- `Damage` 注释明确不是 persistent attribute；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemTestAttributeSet.h:36`、`:37`、`:38`。
+- `PostGameplayEffectExecute` 中把 Damage 转成 `Health -= Damage` 并清零；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestAttributeSet.cpp:100`、`:109`、`:110`。
+- 开发实践推断：Damage meta attribute 是机制示例，不等于完整伤害、死亡、抗性、表现系统都应写在 AttributeSet。
+
+## 测试中直接构造 GE 的方式和项目资产配置混淆
+
+- `GameplayEffectTests.cpp` 用 `NewObject<UGameplayEffect>` 与 `AddModifier` helper 直接写 `Effect->Modifiers`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:126`、`:750`、`:753`。
+- 开发实践推断：这适合机制单测；正式项目通常通过 GE 资产、Spec、SetByCaller、DynamicTags 等运行时数据组合，不应把测试 helper 当项目配置流程。
+
+## 只验证 CurrentValue，不验证 BaseValue
+
+- Aggregator 测试明确验证 Mana current 变化，并验证 BaseValue 不变；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:183`、`:216`、`:240`。
+- 常见错误是只看 UI 当前值，不检查 base/current 差异，导致 Duration/Infinite GE 与 Instant/Periodic GE 的效果判断混乱。
+
+## 只验证服务端属性，不验证客户端复制结果
+
+- `UAbilitySystemTestAttributeSet::GetLifetimeReplicatedProps` 中调用 `DISABLE_ALL_CLASS_REPLICATED_PROPERTIES`，`DOREPLIFETIME` 代码块被注释；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestAttributeSet.cpp:119`、`:121`、`:124`。
+- 因此当前 AttributeSet 测试不能证明项目侧 Attribute RepNotify、`GAMEPLAYATTRIBUTE_REPNOTIFY` 或 UI delegate 的客户端复制链正确，未确认。
+
+## 忽略 tag count 的叠加语义
+
+- Tag count 测试显示设置子 tag 后父 tag count 也会体现，两个子 tag 叠加后父 count 为 3；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayTagCountContainerTests.cpp:21`、`:27`、`:37`、`:40`。
+- 常见错误是把 tag 当 bool，而不是 count，导致多来源 GE/LooseTag 移除一个来源后误以为状态应消失。
+
+## 忽略 ActiveGE 移除后的清理
+
+- Mana buff 测试在移除 ActiveGE 后断言 Mana 回到原值；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:179`、`:188`、`:191`。
+- Stacking/Aggregator 测试也保存 handles 并逐个移除后检查恢复；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:265`、`:278`。
+
+## 忽略 PredictionKey 的 catch-up / reject
+
+- PredictionKey 测试绑定 reject、caught-up、reject-or-caught-up delegate；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/PredictionKeyTests.cpp:111`、`:112`、`:113`。
+- `FScopedDiscardPredictions` 测试覆盖 SilentlyDrop、Accept、Reject；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/PredictionKeyTests.cpp:486`、`:500`、`:512`。
+
+## 只看单测通过，不检查网络场景
+
+- 当前 Tests 目录有 PredictionKey 单测，但未覆盖完整 Ability 激活 RPC、TargetData RPC、ActiveGE replication、Attribute RepNotify、ReplicationProxy、Iris；源码扫描路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests`。
+- 开发实践推断：多人项目需要额外做 listen server / dedicated server / autonomous proxy / simulated proxy 场景测试。
+
+## 自动化测试里没有覆盖 Ability End / Cancel 的全部业务路径
+
+- ASC 测试覆盖 `CancelAbilityHandle` 和 ended callback；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/AbilitySystemComponentTests.cpp:166`、`:167`、`:168`。
+- 但 Cost/Cooldown、AbilityTask、Montage、TargetData、网络预测失败后的 End/Cancel 清理没有在当前测试里完整覆盖，未确认。
+
+## 没有区分 Instant / Duration / Infinite / Periodic GE
+
+- 测试分别构造 Instant damage、Infinite mana buff、Periodic damage、HasDuration stacking；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:126`、`:166`、`:281`、`:330`。
+- 常见错误是用一个 GE 测试结论外推所有 DurationPolicy。
+
+## 没有验证 GameplayCue Remove
+
+- Direct API 测试显式 `AddGameplayCue` 后 `RemoveGameplayCue` 并断言 `OnRemove` 与 tag count；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:443`、`:458`、`:461`、`:466`。
+- 只测 `ExecuteGameplayCue` 不能证明持续 Cue 的移除逻辑正确；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:527`、`:529`。
+
+## 没有验证 AttributeSet 回调顺序
+
+- 当前 TestAttributeSet 只实际启用 `PostGameplayEffectExecute` 的 Damage 处理；`PreGameplayEffectExecute` 主体在 `#if 0` 中，实际返回 true；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestAttributeSet.cpp:29`、`:31`、`:89`、`:92`。
+- 因此 Pre/Post callback 的完整顺序和复杂 clamp/damage/death 流程仍需项目侧测试，未确认。
+
+## 没有验证 SetByCaller 缺失情况
+
+- SetByCaller stacking duration 测试设置 `FSetByCallerFloat` 的 DataName，并在 spec 上调用 `SetSetByCallerMagnitude`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:366`、`:373`、`:382`、`:394`。
+- 缺失 SetByCaller key 的错误/默认值路径没有在这个测试中覆盖，未确认。
+
+## 没有验证 TargetData 校验失败路径
+
+- 当前扫描未发现 `GameplayAbilityTargetingTests.cpp`，TargetData / TargetActor / WaitTargetData / TargetData RPC 未被 `Private/Tests` 覆盖，未确认。
+- 开发实践推断：项目中凡是客户端 TargetData 驱动伤害或 GE 应用，都应补服务端校验失败、取消、consume、防重复触发测试。

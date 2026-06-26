@@ -42,16 +42,16 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 - `editor-blueprint.md`：第十轮 GAS 编辑器与蓝图工具链专题，覆盖 `GameplayAbilitiesEditor` 模块、GameplayAbility 蓝图工厂、Ability 图表、AbilityTask latent K2 节点、GameplayCue 蓝图事件、GameplayEffect/Attribute details customization、资产动作、Ability Audit 与运行时/编辑器边界。
 - `targeting-targetdata.md`：第十一轮 TargetActor / TargetData / Targeting 专题，覆盖 `AGameplayAbilityTargetActor`、TargetData 类型体系、`UAbilityTask_WaitTargetData`、TargetData RPC、确认/取消模式、Trace/Radius/ActorPlacement、`VisualizeTargeting`、TargetData 到 GE/Cue 的衔接。
 - `gameplay-tags-response.md`：第十二轮 GameplayTag / ResponseTable / Ability Tag 条件体系专题，覆盖 ASC tag count、Loose/Replicated/Minimal tags、Ability tag requirements、GE tag components、`UGameplayTagReponseTable`、Tag AbilityTask、Cue/网络/蓝图/编辑器衔接。
+- `tests-practices.md`：第十五轮 GAS Tests / 官方测试用例反推实践专题，覆盖 `Private/Tests`、`AAbilitySystemTestPawn`、`UAbilitySystemTestAttributeSet`、GE/Attribute/Aggregator/Ability/Cue/Tag/Prediction 测试覆盖点、前 14 轮结论校验与未覆盖清单。
 - `pitfalls.md`：常见坑清单，按轮次补充 ASC、Ability、GameplayEffect、AttributeSet、AbilityTask、GameplayCue、网络预测/复制相关问题。
 
 ## 优先分析顺序
 
-优先从 `quick-reference.md` 快速定位用户问题属于 ASC、GA、GE、AttributeSet、Cue、AbilityTask、网络预测/复制、GameplayTag/ResponseTable、GameplayEffectComponent、数值计算/属性捕获中的哪一类；需要源码依据时再回到 `architecture.md`、`core-classes.md`、`call-flows.md` 与对应专题文档复核。深入分析时，从 `UAbilitySystemComponent` 串联运行时核心路径，再按问题需要进入 `UGameplayAbility`、`UGameplayEffect`、`FGameplayAbilitySpec`、`FActiveGameplayEffect`、`UAttributeSet`、`UAbilityTask`、`UGameplayCueManager`、`UGameplayTagReponseTable`、`UGameplayEffectExecutionCalculation`、`UGameplayModMagnitudeCalculation`、网络预测/复制与序列化相关类型。
+优先从 `quick-reference.md` 快速定位用户问题属于 ASC、GA、GE、AttributeSet、Cue、AbilityTask、网络预测/复制、GameplayTag/ResponseTable、GameplayEffectComponent、数值计算/属性捕获、官方测试覆盖中的哪一类；需要源码依据时再回到 `architecture.md`、`core-classes.md`、`call-flows.md` 与对应专题文档复核。深入分析时，从 `UAbilitySystemComponent` 串联运行时核心路径，再按问题需要进入 `UGameplayAbility`、`UGameplayEffect`、`FGameplayAbilitySpec`、`FActiveGameplayEffect`、`UAttributeSet`、`UAbilityTask`、`UGameplayCueManager`、`UGameplayTagReponseTable`、`UGameplayEffectExecutionCalculation`、`UGameplayModMagnitudeCalculation`、网络预测/复制与序列化相关类型；如果用户询问“官方测试是否验证”，优先查 `tests-practices.md`。
 
 下一轮推荐入口：
 
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemTestPawn.h`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestPawn.cpp`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemTestAttributeSet.h`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestAttributeSet.cpp`
+- GAS Debug / Log / VisualLogger / Console Variables 专题：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemLog.h`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemLog.cpp`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h`
+- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp`

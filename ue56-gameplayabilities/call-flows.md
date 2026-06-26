@@ -1242,3 +1242,101 @@ flowchart TD
 - Source capture 来自 `EffectContext.GetInstigatorAbilitySystemComponent()`，Target capture 来自目标 ASC；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1764`、`:1748`。
 - `CaptureAttributeForGameplayEffect` 根据 `bSnapshot` 决定快照还是引用 aggregator；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3751`、`:3756`、`:3760`。
 - Non-Snapshot capture 注册 dependent，aggregator dirty 后通知 ASC 重新计算依赖它的 ActiveGE；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:2389`、`:3368`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectAggregator.cpp:614`。
+
+---
+
+# 官方测试反推调用链（第十五轮）
+
+详细专题见 `tests-practices.md`。
+
+## 1. TestPawn 初始化链
+
+```mermaid
+flowchart TD
+    A["AAbilitySystemTestPawn ctor"] --> B["CreateDefaultSubobject<UAbilitySystemComponent>"]
+    B --> C["ASC::SetIsReplicated(true)"]
+    A --> D["PostInitializeComponents"]
+    D --> E["ASC::InitStats(UAbilitySystemTestAttributeSet, nullptr)"]
+    F["PredictionKeyTests"] --> G["ASC::InitAbilityActorInfo(Controller, Pawn)"]
+```
+
+源码确认：
+
+- 构造函数创建 ASC 并启用复制；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestPawn.cpp:14`、`:15`。
+- `PostInitializeComponents` 调 `InitStats` 初始化测试 AttributeSet；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestPawn.cpp:20`、`:25`。
+- PredictionKey 测试手动调用 `InitAbilityActorInfo`，TestPawn 本身未在初始化链里调用；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/PredictionKeyTests.cpp:465`。
+
+## 2. GE 测试调用链
+
+```mermaid
+flowchart TD
+    A["NewObject<UGameplayEffect>"] --> B["AddModifier / set DurationPolicy / Period / Stack"]
+    B --> C["SourceASC::ApplyGameplayEffectToTarget 或 ApplyGameplayEffectSpecToSelf"]
+    C --> D{"GE 类型"}
+    D -->|"Instant"| E["直接执行 modifier"]
+    D -->|"Infinite / Duration"| F["生成 ActiveGameplayEffect"]
+    D -->|"Periodic"| G["周期执行 modifier"]
+    E --> H["AttributeSet / 属性断言"]
+    F --> I["Aggregator / RemoveActiveGameplayEffect"]
+    G --> H
+```
+
+简化伪代码：
+
+```cpp
+GE = NewObject<UGameplayEffect>();
+AddModifier(GE, Attribute, Op, Magnitude);
+GE->DurationPolicy = Instant / Infinite / HasDuration;
+Handle = SourceASC->ApplyGameplayEffectToTarget(GE, DestASC);
+TestEqual(DestSet->Mana.GetCurrentValue(), Expected);
+DestASC->RemoveActiveGameplayEffect(Handle);
+```
+
+源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:126`、`:138`、`:166`、`:179`、`:188`、`:194`、`:281`、`:750`。
+
+## 3. Ability 激活测试调用链
+
+```mermaid
+flowchart TD
+    A["FGameplayAbilitySpec(UGameplayAbility, Level)"] --> B["ASC::GiveAbility"]
+    B --> C["FindAbilitySpecFromHandle / GetAllAbilities"]
+    C --> D["ASC::TryActivateAbility"]
+    D --> E{"成功?"}
+    E -->|"true"| F["AbilityActivated delegate"]
+    F --> G["ASC::CancelAbilityHandle"]
+    G --> H["AbilityEnded delegate"]
+    E -->|"false"| I["AbilityFailed delegate"]
+```
+
+源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/AbilitySystemComponentTests.cpp:132`、`:136`、`:139`、`:157`、`:166`、`:172`、`:196`、`:199`。
+
+测试中的默认 `UGameplayAbility` 激活后 committed callback 为 false，间接提醒 `CommitAbility` 不是 ASC 自动替业务调用；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/AbilitySystemComponentTests.cpp:161`。
+
+## 4. GameplayCue 测试调用链
+
+```mermaid
+flowchart TD
+    A["UGameplayCueNotify_UnitTest"] --> B["RuntimeCueSet 手动注册"]
+    C["ASC::AddGameplayCue"] --> D["OnActive + WhileActive + tag count"]
+    E["ASC::RemoveGameplayCue"] --> F["OnRemove + tag count--"]
+    G["ASC::ExecuteGameplayCue"] --> H["OnExecute"]
+    I["GE GameplayCues"] --> J["Apply GE"] --> K["Cue API"]
+```
+
+源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayCueTests.h:16`、`:24`、`:27`、`:30`、`:33`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:417`、`:443`、`:458`、`:527`、`:537`、`:683`。
+
+## 5. PredictionKey 测试调用链
+
+```mermaid
+flowchart TD
+    A["FPredictionKey::GenerateDependentPredictionKey"] --> B["绑定 Reject / CaughtUp delegate"]
+    B --> C{"Reject 或 CatchUp"}
+    C -->|"Reject"| D["FPredictionKeyDelegates::Reject"]
+    C -->|"Accept"| E["FPredictionKeyDelegates::CatchUpTo"]
+    F["FScopedPredictionWindow(ASC)"] --> G["ASC::ScopedPredictionKey valid"]
+    H["FScopedDiscardPredictions"] --> I["SilentlyDrop / Accept / Reject"]
+```
+
+源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/PredictionKeyTests.cpp:62`、`:83`、`:88`、`:111`、`:112`、`:113`、`:476`、`:486`、`:500`、`:512`。
+
+未确认：当前测试没有完整 client/server Ability 激活 RPC、GenericReplicatedEvent、TargetData RPC、ActiveGE replication、Attribute RepNotify、Iris serialization 集成链。

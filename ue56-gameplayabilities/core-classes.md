@@ -545,3 +545,23 @@ ASC `BlockedAbilityTags` 的关系：Ability 的 `BlockAbilitiesWithTag` 通过 
 - 一个 modifier 的数值来源优先从 `FGameplayEffectModifierMagnitude` 判断；复杂多属性输出再看 `UGameplayEffectExecutionCalculation`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:1136`、`:3136`、`:3146`。
 - Snapshot/Non-Snapshot 问题优先看 `FGameplayEffectAttributeCaptureDefinition::bSnapshot` 与 `FActiveGameplayEffectsContainer::CaptureAttributeForGameplayEffect`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectAttributeCaptureDefinition.h:47`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3751`。
 - Aggregator op 结果不符合预期时，优先核对 `EGameplayModOp` 公式和 `FAggregatorModChannel::EvaluateWithBase`；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/GameplayEffectTypes.h:116`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectAggregator.cpp:76`、`:98`。
+
+---
+
+# 测试辅助类索引（第十五轮）
+
+详细专题见 `tests-practices.md`。本节只记录官方测试里出现的 GAS 辅助类与覆盖边界。
+
+| 类型/测试 | 定位 | 源码路径 |
+|---|---|---|
+| `AAbilitySystemTestPawn` | 测试用最小 Pawn，继承 `ADefaultPawn`，实现 `IGameplayCueInterface` 与 `IAbilitySystemInterface`，构造 replicated ASC，`PostInitializeComponents` 调 `InitStats` | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemTestPawn.h:17`、`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestPawn.cpp:14`、`:15`、`:25` |
+| `UAbilitySystemTestAttributeSet` | 测试用 AttributeSet，包含 `Health`、`Mana`、`Damage` 等测试属性；`Damage` 注释明确不是 persistent attribute | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemTestAttributeSet.h:13`、`:30`、`:36`、`:38` |
+| `UAbilitySystemTestAttributeSet::PostGameplayEffectExecute` | 测试 Damage meta attribute：当 `Damage` 被修改时执行 `Health -= Damage` 并清零 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemTestAttributeSet.cpp:92`、`:100`、`:109`、`:110` |
+| `UGameplayCueNotify_UnitTest` | 测试用 `UGameplayCueNotify_Static`，通过计数器记录 `OnExecute`、`OnActive`、`WhileActive`、`OnRemove` | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayCueTests.h:16`、`:24`、`:27`、`:30`、`:33` |
+| `FGameplayEffectsTest` / `GameplayEffectsTestSuite` | 覆盖 GE、Attribute、Aggregator、Stacking、SetByCaller、GameplayCue | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayEffectTests.cpp:83`、`:126`、`:194`、`:281`、`:357`、`:790` |
+| `FAbilitySystemComponentTest` | 覆盖 ASC Ability 基础激活、取消、失败回调 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/AbilitySystemComponentTests.cpp:132`、`:172`、`:243` |
+| `FGameplayPredictionKeyTest_UnitTest` / `FGameplayPredictionKeyTest_ScopedPredictionsTest` | 覆盖 prediction key 依赖链、caught-up/reject delegate、scoped prediction window | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/PredictionKeyTests.cpp:15`、`:62`、`:83`、`:88`、`:432` |
+| `FGameplayTagCountContainerTest` | 覆盖 `FGameplayTagCountContainer` 显式 tag count 与父 tag count | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayTagCountContainerTests.cpp:5`、`:16`、`:21`、`:38`、`:55` |
+| `FGameplayTagQueryTest` | 比较 `FGameplayTagRequirements::RequirementsMet` 与 `FGameplayTagQuery::Matches` 的等价结果 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Tests/GameplayTagQueryTests.cpp:9`、`:17`、`:98`、`:116` |
+
+未确认/未覆盖：当前 `Private/Tests` 未发现 `GameplayAbilityTargetingTests.cpp`、`GameplayAbilitiesTest.cpp`、`GameplayCueTests.cpp`；TargetData、AbilityTask、GEComponents、ExecutionCalculation、MMC、Attribute Capture、真实 client/server replication 没有被这些测试完整覆盖。

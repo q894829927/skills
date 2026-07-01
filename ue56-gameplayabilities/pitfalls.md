@@ -1,3 +1,22 @@
+# 最终总坑点（第十七轮收束）
+
+- ASC 没初始化 ActorInfo：先查 `InitAbilityActorInfo`、OwnerActor、AvatarActor，详见 `core-classes.md` 和 `debugging-logging.md`。
+- AttributeSet 没注册或复制写错：区分 ASC subobject 复制和 Attribute 自身 RepNotify，详见 `attributes.md`。
+- Cost / Cooldown GE 配错：Cost 看属性和 modifier，Cooldown 必须有合适的 Granted Cooldown Tag，详见 `gameplay-effects.md`。
+- CommitAbility 没调用：ASC 不会自动替 Ability 调 Commit，详见 `call-flows.md` 和 `final-templates.md`。
+- EndAbility 忘记调用：Ability 会保持 active，Task、Tag、Cue、block 状态可能残留，详见 `ability-tasks.md`。
+- AbilityTask 没结束：长期绑定 delegate 或持续 Tick，详见 `ability-tasks.md` 和 `quick-reference.md` 性能收束。
+- WaitTargetData 服务端没收到：检查 PredictionKey、TargetData RPC、服务端 delegate 和 consume，详见 `targeting-targetdata.md`。
+- SetByCaller key 错：Name 和 GameplayTag 两套 key 不要混用，详见 `calculations-captures.md`。
+- Damage Meta Attribute 没清零：Damage 是项目实践型临时属性，用后通常清零，详见 `attributes.md`。
+- GameplayCue Tag / Notify 没绑定：Cue tag 是表现路由，不是状态源，详见 `gameplay-cues.md`。
+- LooseTag 以为会复制：普通 Loose Tag 不复制，需要复制时用 Replicated Loose Tag 或 GE Granted Tag，详见 `gameplay-tags-response.md`。
+- PredictionKey 跨帧失效：跨帧 AbilityTask / TargetData 需要重新确认 prediction window，详见 `networking-prediction.md`。
+- GEComponents 当成运行时状态容器：GEComponent 是 GE 配置子对象，不保存 per-application 状态，详见 `gameplay-effect-components.md`。
+- ExecutionCalculation 写副作用：Execution 应偏数值结算，表现和业务副作用放 Ability / Cue / 项目系统，详见 `calculations-captures.md`。
+- Editor 模块引用进 Runtime：GameplayAbilitiesEditor 类型不能进运行时模块依赖，详见 `editor-blueprint.md`。
+- 只测单机，不测客户端 / 服务端：官方 tests 不覆盖完整多人链路，项目侧仍需 dedicated/listen/autonomous/simulated 场景测试，详见 `tests-practices.md`。
+
 # 常见坑：GAS Debug / Log / 调试排错（第十六轮）
 
 ## 以为 Ability 激活失败一定会有明显日志

@@ -27,39 +27,18 @@ description: UE 5.6 GameplayAbilities/GAS source-study assistant for Unreal Engi
 
 ## 当前参考资料
 
-- `quick-reference.md`：GAS 速查表，按 ASC、GA、GE、AttributeSet、GameplayCue、常见玩法模板整理“什么时候用哪个类/函数/配置”。
-- `architecture.md`：第一轮源码地图，只基于 `Build.cs` 和 `Public/Private` 目录结构。
-- `core-classes.md`：核心类笔记，已覆盖 `UAbilitySystemComponent`、`UGameplayAbility`，并索引 GameplayEffect 体系。
-- `call-flows.md`：调用链笔记，已覆盖 Ability 激活链、Ability 生命周期、GameplayEffect 应用链。
-- `gameplay-effects.md`：第四轮 GameplayEffect 专题，覆盖 `UGameplayEffect`、`FGameplayEffectSpec`、`FActiveGameplayEffect`、Modifier、Duration/Period、Stacking、GameplayCue、Cost/Cooldown 接入和 GEComponents 概览。
-- `gameplay-effect-components.md`：第十三轮 GameplayEffectComponent / GEComponents 深入专题，覆盖 `UGameplayEffectComponent` 基类 hook、10 个内置 GEComponent、GE 应用/激活/移除接入、deprecated 字段迁移、Tag/Ability/Cue/网络/编辑器衔接与配置速查。
-- `calculations-captures.md`：第十四轮 ExecutionCalculation / ModMagnitudeCalculation / Attribute Capture 深入专题，覆盖 `UGameplayEffectExecutionCalculation`、`UGameplayModMagnitudeCalculation`、Attribute Capture、Snapshot/Non-Snapshot、Aggregator、Modifier Magnitude、SetByCaller、预测与编辑器衔接。
-- `attributes.md`：第五轮 AttributeSet 专题，覆盖 `UAttributeSet`、`FGameplayAttributeData`、`FGameplayAttribute`、ASC 管理 AttributeSet、属性定义/复制、属性回调、GE 修改 Attribute、Base/Current、Damage/Healing 和 UI delegate 绑定。
-- `ability-tasks.md`：第六轮 AbilityTask / GameplayTask 专题，覆盖 `UAbilityTask`、`UGameplayTask`、`UGameplayTasksComponent`、Ability `ActiveTasks`、常见 Task 分类、输入/事件/蒙太奇/TargetData/GE/Tag/Attribute 监听流程和预测接入点。
-- `gameplay-cues.md`：第七轮 GameplayCue 专题，覆盖 `UGameplayCueManager`、`UGameplayCueSet`、`GameplayCueNotify` 类型、`FGameplayCueParameters`、ASC/GE 触发路径、Notify 生命周期、复制与加载机制。
-- `networking-prediction.md`：第八轮 GAS 网络预测 / RPC / Replication / Serialization 专题，覆盖 `FPredictionKey`、`FScopedPredictionWindow`、Ability 激活 RPC、GenericReplicatedEvent、TargetData、GE/Attribute/Cue 复制、ASC ReplicationMode、ReplicationProxy、Iris/NetSerializer。
-- `globals-blueprint-library.md`：第九轮 GAS 全局入口与蓝图辅助 API 专题，覆盖 `UAbilitySystemGlobals`、`UAbilitySystemBlueprintLibrary`、`IAbilitySystemInterface`、ASC 查找、EffectContext、TargetData、SetByCaller、Dynamic Tags、GameplayCueParameters 与全局配置。
-- `editor-blueprint.md`：第十轮 GAS 编辑器与蓝图工具链专题，覆盖 `GameplayAbilitiesEditor` 模块、GameplayAbility 蓝图工厂、Ability 图表、AbilityTask latent K2 节点、GameplayCue 蓝图事件、GameplayEffect/Attribute details customization、资产动作、Ability Audit 与运行时/编辑器边界。
-- `targeting-targetdata.md`：第十一轮 TargetActor / TargetData / Targeting 专题，覆盖 `AGameplayAbilityTargetActor`、TargetData 类型体系、`UAbilityTask_WaitTargetData`、TargetData RPC、确认/取消模式、Trace/Radius/ActorPlacement、`VisualizeTargeting`、TargetData 到 GE/Cue 的衔接。
-- `gameplay-tags-response.md`：第十二轮 GameplayTag / ResponseTable / Ability Tag 条件体系专题，覆盖 ASC tag count、Loose/Replicated/Minimal tags、Ability tag requirements、GE tag components、`UGameplayTagReponseTable`、Tag AbilityTask、Cue/网络/蓝图/编辑器衔接。
-- `tests-practices.md`：第十五轮 GAS Tests / 官方测试用例反推实践专题，覆盖 `Private/Tests`、`AAbilitySystemTestPawn`、`UAbilitySystemTestAttributeSet`、GE/Attribute/Aggregator/Ability/Cue/Tag/Prediction 测试覆盖点、前 14 轮结论校验与未覆盖清单。
-- `pitfalls.md`：常见坑清单，按轮次补充 ASC、Ability、GameplayEffect、AttributeSet、AbilityTask、GameplayCue、网络预测/复制相关问题。
+- `quick-reference.md`：最终速查入口，用于按 ASC、Ability、GE、Attribute、Cue、TargetData、Tag、Prediction、Debug、Tests、Performance 快速定位文档。
+- `final-templates.md`：生成或审查 GAS 项目侧代码前的规则、模板结构和检查清单；只给规则，不给完整业务代码。
+- `debugging-logging.md`：调试、日志、VisualLogger、GameplayDebugger、CVar 和常见排错入口。
+- `tests-practices.md`：官方 Tests 覆盖点、未覆盖点和可借鉴的测试方式。
+- 专题文档：`architecture.md`、`core-classes.md`、`call-flows.md`、`gameplay-effects.md`、`gameplay-effect-components.md`、`calculations-captures.md`、`attributes.md`、`ability-tasks.md`、`gameplay-cues.md`、`networking-prediction.md`、`globals-blueprint-library.md`、`editor-blueprint.md`、`targeting-targetdata.md`、`gameplay-tags-response.md`、`pitfalls.md`。
 
-## 优先分析顺序
+## 最终使用顺序
 
-优先从 `quick-reference.md` 快速定位用户问题属于 ASC、GA、GE、AttributeSet、Cue、AbilityTask、网络预测/复制、GameplayTag/ResponseTable、GameplayEffectComponent、数值计算/属性捕获、官方测试覆盖中的哪一类；需要源码依据时再回到 `architecture.md`、`core-classes.md`、`call-flows.md` 与对应专题文档复核。深入分析时，从 `UAbilitySystemComponent` 串联运行时核心路径，再按问题需要进入 `UGameplayAbility`、`UGameplayEffect`、`FGameplayAbilitySpec`、`FActiveGameplayEffect`、`UAttributeSet`、`UAbilityTask`、`UGameplayCueManager`、`UGameplayTagReponseTable`、`UGameplayEffectExecutionCalculation`、`UGameplayModMagnitudeCalculation`、网络预测/复制与序列化相关类型；如果用户询问“官方测试是否验证”，优先查 `tests-practices.md`。
+1. 普通问题先查 `quick-reference.md`。
+2. 代码生成或改造前先查 `final-templates.md`。
+3. 具体机制再查对应专题文档，并按需回到源码复核。
+4. 排错先查 `debugging-logging.md`。
+5. 官方测试验证与测试写法先查 `tests-practices.md`。
 
-下一轮推荐入口：
-
-- GAS Debug / Log / VisualLogger / Console Variables 专题：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemLog.h`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemLog.cpp`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h`
-- `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp`
-
-## 第十六轮补充
-
-- `debugging-logging.md`：第十六轮 GAS Debug / Log / VisualLogger / Console Variables / 调试排错专题，覆盖 `ABILITY_LOG`、LogCategory、ASC `DisplayDebug` / `PrintDebug`、VisualLogger、GameplayDebugger、Basic HUD、CheatManager 调试命令、GameplayCue / Prediction / ServerRPCBatching 相关 CVar、Ability 激活失败和 GE/Attribute/Cue/TargetData 排错清单。
-
-优先分析顺序补充：如果用户问题表现为“技能放不出来、GE 没生效、Tag/Cue/Attribute 客户端不一致、TargetData/RPC 没到服务端、预测失败不知道原因”，先查 `debugging-logging.md`，再回到对应专题源码复核。
-
-下一轮推荐入口：GAS 性能 / Stats / Profiling 专题，可从 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemStats.h` 和相关 `DECLARE_CYCLE_STAT` / `SCOPE_CYCLE_COUNTER` 调用点开始。
+源码分析阶段已完成，不再建议继续按轮次扩展。未来只在遇到具体项目问题、源码版本差异或未确认项需要复核时，按主题局部更新现有文档。

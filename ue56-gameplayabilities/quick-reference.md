@@ -2,6 +2,64 @@
 
 > 适用范围：基于当前 `ue56-gameplayabilities` Skill 知识库整理，用于快速判断“什么时候用哪个 GAS 类 / 函数 / 配置”。默认只面向项目侧开发，不修改 `Engine/` 源码。
 
+## 最终导航：用户问题应该查哪里
+
+| 用户问题 | 优先查 | 继续查 |
+|---|---|---|
+| ASC / 初始化 / Owner / Avatar / GiveAbility / ApplyGE | `core-classes.md` | `call-flows.md`、`pitfalls.md` |
+| Ability 生命周期 / Commit / End / Cancel / 实例化策略 | `core-classes.md`、`call-flows.md` | `ability-tasks.md`、`networking-prediction.md` |
+| GameplayEffect / Spec / ActiveGE / Cost / Cooldown | `gameplay-effects.md` | `gameplay-effect-components.md`、`calculations-captures.md` |
+| AttributeSet / AttributeData / RepNotify / UI 属性监听 | `attributes.md` | `gameplay-effects.md`、`networking-prediction.md` |
+| GameplayCue / CueNotify / CueManager / Cue 不播放 | `gameplay-cues.md` | `debugging-logging.md` |
+| AbilityTask / Montage / Event / WaitInput / WaitAttribute | `ability-tasks.md` | `networking-prediction.md` |
+| TargetData / TargetActor / WaitTargetData / 命中位置 | `targeting-targetdata.md` | `ability-tasks.md`、`networking-prediction.md` |
+| GameplayTag / ResponseTable / Ability tag 条件 | `gameplay-tags-response.md` | `gameplay-effect-components.md` |
+| Prediction / RPC / Replication / Serialization / Iris | `networking-prediction.md` | `debugging-logging.md` |
+| BlueprintLibrary / Globals / Interface / 蓝图辅助 API | `globals-blueprint-library.md` | `editor-blueprint.md` |
+| Editor / K2 节点 / GameplayAbilitiesEditor | `editor-blueprint.md` | `architecture.md` |
+| Debug / Log / VisualLogger / CVar / 排错 | `debugging-logging.md` | `pitfalls.md` |
+| Tests / 官方示例 / 覆盖边界 | `tests-practices.md` | `pitfalls.md` |
+| 性能 / Stats / Profiling | 本文“GAS Performance / Stats 收束” | `debugging-logging.md` |
+| 生成或审查项目侧代码 | `final-templates.md` | 对应专题文档 |
+
+## GAS Performance / Stats 收束
+
+`AbilitySystemStats.h` 定义 `STATGROUP_AbilitySystem`，这是 GameplayAbilities 侧性能统计的主入口；源码路径：`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemStats.h:8`。本节只整理入口，不展开 Unreal Stats 底层。
+
+| 性能入口 | 已确认 stat / 使用点 | 源码路径 |
+|---|---|---|
+| GE tag 查询与 ActiveGE 数据查询 | `STAT_GameplayEffectsHasAllTags`、`HasAnyTag`、`GetOwnedTags`、`GetActiveEffects*` 在头文件声明并在 cpp 定义；部分 ActiveGE 查询有 `SCOPE_CYCLE_COUNTER` | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemStats.h:10`、`:19`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemStats.cpp:5`、`:14`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:5212`、`:5342` |
+| GE 应用 / 执行 / 移除 | `ApplyGameplayEffectSpec`、`ExecuteActiveEffectsFrom`、`InternalExecuteMod`、`PostGameplayEffectExecute`、ActiveGE added/removed | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemStats.h:23`、`:24`、`:37`、`:41`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3068`、`:3909`、`:3944`、`:3991`、`:4501` |
+| ASC ApplyGE / Cue / delegate | ASC 私有 stat 覆盖 ApplySpecToSelf/Target、ExecuteGameplayEffect、InvokeGameplayCueEvent、OnGameplayEffectApplied | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent.cpp:27`、`:33`、`:779`、`:801`、`:1003`、`:1229`、`:1955` |
+| Ability 激活 RPC / 查找 Spec | ServerTryActivate、ServerEndAbility、FindAbilitySpecFromHandle | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:45`、`:46`、`:898`、`:968`、`:2074`、`:2202` |
+| Ability cooldown 查询 | `STAT_GameplayAbilityGetCooldownTimeRemaining` / `AndDuration` | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemStats.h:21`、`:22`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/GameplayAbility.cpp:1130`、`:1164` |
+| AbilityTask 数量与 Tick | `STAT_TickAbilityTasks`、`STAT_AbilitySystem_TaskCount`，Task 初始化/销毁时更新计数 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemStats.h:28`、`:44`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:121`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask.cpp:85`、`:122`、`:155` |
+| AttributeSet 初始化 | `STAT_InitAttributeSetDefaults` | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemStats.h:27`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AttributeSet.cpp:674`、`:726` |
+| Aggregator dirty / evaluate | 声明了 `STAT_AggregatorEvaluate` 和 `STAT_AggregatorBroadcastOnDirty`；本轮确认 `BroadcastOnDirty` 使用点，`AggregatorEvaluate` 使用点未确认 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemStats.h:30`、`:31`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectAggregator.cpp:596` |
+| GameplayCue | Cue function 查找、Cue interface、Cue notify static/actor、CueManager 快速 scope | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemStats.h:25`、`:34`、`:35`、`:42`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemGlobals.cpp:269`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueInterface.cpp:131`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueNotify_Actor.cpp:224`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:143`、`:193`、`:461` |
+| ActiveGE 复制中的 Cue 检查 | `STAT_ActiveGameplayEffectsContainer_NetDeltaSerialize_CheckRepGameplayCues` 快速 scope | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:4969` |
+| TargetData / Prediction / RPC | 本轮未确认专用 TargetData 或 Prediction stat；RPC 只确认 ServerTryActivate / ServerEndAbility 和 ServerRPCBatching 调试日志 | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:2074`、`:2202`、`:4098` |
+| Memory stat / DWORD counter | 本轮未确认 `DECLARE_MEMORY_STAT` 或 `DECLARE_DWORD_COUNTER_STAT`；确认的是 `DECLARE_DWORD_ACCUMULATOR_STAT_EXTERN` 的 AbilityTask Count | `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemStats.h:44` |
+
+## GAS 常见性能风险速查
+
+| 风险点 | 风险原因 | 排查文档 / 源码入口 |
+|---|---|---|
+| Ability 频繁激活 / 取消 | 开发实践推断：频繁查 Spec、RPC 激活、Task 创建和 End/Cancel 清理会放大开销 | `call-flows.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:898`、`:2074`、`:2202` |
+| AbilityTask 忘记结束 | Task count 增长、TickAbilityTasks 持续执行，且 Ability 可能一直 active | `ability-tasks.md`、`pitfalls.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemStats.h:28`、`:44` |
+| TargetActor 每次激活都 Spawn | 开发实践推断：TargetActor 是 Actor，频繁 spawn/销毁和复制/确认会增加成本 | `targeting-targetdata.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask_WaitTargetData.cpp:228` |
+| GameplayCueNotify Actor 没复用或没清理 | Actor Notify 适合持续表现，但未清理会残留特效/引用；spawn 有 CueManager scope | `gameplay-cues.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:461`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueNotify_Actor.cpp:224` |
+| ActiveGameplayEffect 数量过多 | ActiveGE 查询、复制、tag/cue、aggregator 注册和移除都会随数量增长 | `gameplay-effects.md`、`networking-prediction.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3991`、`:4969`、`:5282` |
+| Periodic GE 过多 | 开发实践推断：周期执行会反复走 execute/modifier/AttributeSet 回调 | `gameplay-effects.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3068`、`:3909`、`:3944` |
+| Attribute Aggregator 依赖链过深 | Dirty 广播和依赖重算可能级联 | `calculations-captures.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectAggregator.cpp:596` |
+| GameplayTag event 绑定过多 | 开发实践推断：tag count 变化会广播 delegate；长期监听要明确解绑 | `gameplay-tags-response.md`、`ability-tasks.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Public/AbilitySystemComponent.h:743` |
+| WaitGameplayTag / WaitAttributeChange 长期存在 | 本质是 ASC delegate 封装；未 EndTask 会长期持有监听 | `ability-tasks.md`、`attributes.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/Abilities/Tasks/AbilityTask.cpp:85` |
+| TargetData RPC 频繁发送 | TargetData 缓存、delegate、RPC batch 和 consume 都有成本；频繁发送还增加预测复杂度 | `targeting-targetdata.md`、`networking-prediction.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:3945`、`:4098` |
+| Prediction 失败导致重复表现和回滚成本 | 开发实践推断：本地先播表现/应用预测 GE，服务端拒绝后需要清理 | `networking-prediction.md`、`debugging-logging.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/AbilitySystemComponent_Abilities.cpp:2251` |
+| GameplayCue 异步加载路径过宽 | CueManager 有加载库和路由 scope；路径过宽会增加资产扫描/加载成本 | `gameplay-cues.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayCueManager.cpp:819` |
+| GEComponents AdditionalEffects 递归触发 | 开发实践推断：额外 GE 可继续应用 GE，配置循环会放大应用链 | `gameplay-effect-components.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffectComponents/AdditionalEffectsGameplayEffectComponent.cpp:43`、`:111` |
+| ExecutionCalculation 做过重逻辑 | Execution 发生在 GE execute 路径，可输出多属性修改；复杂副作用和非确定性会影响预测和性能 | `calculations-captures.md`；`Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/Private/GameplayEffect.cpp:3068`、`:3136` |
+
 ## 18. GAS Debug / 排错速查
 
 详细专题见 `debugging-logging.md`。一句话记忆：
